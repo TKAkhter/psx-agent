@@ -1,0 +1,28 @@
+{
+  "name": "cronjobly",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+   "build": "webpack",
+    "start": "node dist/index.js",
+    "dev": "node src/index.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "dotenv": "^17.4.1",
+    "moment-timezone": "^0.6.1",
+    "mongodb": "^6.21.0",
+    "nodemailer": "^8.0.5",
+    "twilio": "^5.13.1",
+    "yahoo-finance2": "^3.14.0"
+  },
+  "keywords": [],
+  "description": "",
+  "devDependencies": {
+    "terser": "^5.46.1",
+    "terser-webpack-plugin": "^5.4.0",
+    "webpack": "^5.106.1",
+    "webpack-cli": "^7.0.2"
+  }
+}

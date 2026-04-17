@@ -1,18 +1,10 @@
 "use strict";
-const { f2 } = require("./indicators");
+const { round2 } = require("./indicators");
 const db = require("./db");
 
-/**
- * Compare current prices against the most recent saved signals
- * to calculate directional accuracy.
- */
 async function evaluatePerformance(currentData) {
     try {
-        const docs = await db.findMany(
-            "signals",
-            {},
-            { sort: { createdAt: -1 }, limit: 1 }
-        );
+        const docs = await db.findMany("signals", {}, { sort: { createdAt: -1 }, limit: 1 });
         if (!docs.length) return null;
 
         const prev = docs[0];
@@ -27,49 +19,30 @@ async function evaluatePerformance(currentData) {
             if (!prevSig || !prevSnap?.price) continue;
 
             total++;
-            const priceDelta = (curr.price - prevSnap.price) / prevSnap.price * 100;
+            const delta = (curr.price - prevSnap.price) / prevSnap.price * 100;
             const isBuy = prevSig.action === "BUY" || prevSig.action === "STRONG_BUY";
             const isSell = prevSig.action === "SELL" || prevSig.action === "STRONG_SELL";
             const ok = isBuy ? curr.price >= prevSnap.price
                 : isSell ? curr.price <= prevSnap.price
-                    : Math.abs(priceDelta) < 2;
+                    : Math.abs(delta) < 2;
 
             if (ok) correct++;
-            breakdown.push({
-                symbol: sym,
-                action: prevSig.action,
-                prevPrice: prevSnap.price,
-                currPrice: curr.price,
-                delta: f2(priceDelta),
-                correct: ok,
-            });
+            breakdown.push({ symbol: sym, action: prevSig.action, prevPrice: prevSnap.price, currPrice: curr.price, delta: round2(delta), correct: ok });
         }
 
         if (!total) return null;
-        return {
-            accuracy: f2((correct / total) * 100),
-            correct,
-            total,
-            breakdown,
-            sessionDate: prev.createdAt,
-        };
+        return { accuracy: round2((correct / total) * 100), correct, total, breakdown, sessionDate: prev.createdAt };
     } catch (err) {
-        console.warn("  ⚠ Performance eval skipped:", err.message);
+        console.warn("  ⚠ Performance eval:", err.message);
         return null;
     }
 }
 
-/**
- * Save the current run's signals and price snapshot to MongoDB.
- */
-async function saveSignals(signals, summary, stockData, geminiStance) {
+async function saveSession(signals, summary, stockData, geminiStance) {
     const snapshot = {};
     for (const [ticker, d] of Object.entries(stockData)) {
         if (!d.price || d.error) continue;
-        snapshot[ticker.replace(".KA", "")] = {
-            price: d.price,
-            unrealizedPct: d.unrealizedPct,
-        };
+        snapshot[ticker.replace(".KA", "")] = { price: d.price, unrealizedPct: d.unrealizedPct };
     }
     return db.insertOne("signals", {
         createdAt: new Date(),
@@ -80,4 +53,4 @@ async function saveSignals(signals, summary, stockData, geminiStance) {
     });
 }
 
-module.exports = { evaluatePerformance, saveSignals };  
+module.exports = { evaluatePerformance, saveSession };

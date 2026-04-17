@@ -2,49 +2,49 @@
 const { MongoClient } = require("mongodb");
 const { ENV } = require("./config");
 
-let client = null;
-let db = null;
+let mongoClient = null;
+let mongoDB = null;
 
-async function connect() {
-    if (db) return db;
-    client = new MongoClient(ENV.MONGODB_URI);
-    await client.connect();
-    db = client.db(ENV.MONGODB_DB);
-    console.log(`  ✓ MongoDB connected → ${ENV.MONGODB_DB}`);
-    return db;
+async function connectDB() {
+    if (mongoDB) return mongoDB;
+    mongoClient = new MongoClient(ENV.MONGODB_URI);
+    await mongoClient.connect();
+    mongoDB = mongoClient.db(ENV.MONGODB_DB);
+    console.log(`  ✓ MongoDB → ${ENV.MONGODB_DB}`);
+    return mongoDB;
 }
 
-async function getDb() {
-    if (!db) await connect();
-    return db;
+async function getDB() {
+    if (!mongoDB) await connectDB();
+    return mongoDB;
 }
 
-async function close() {
-    if (client) {
-        await client.close();
-        client = null;
-        db = null;
+async function closeDB() {
+    if (mongoClient) {
+        await mongoClient.close();
+        mongoClient = null;
+        mongoDB = null;
     }
 }
 
 async function insertOne(collection, doc) {
-    const d = await getDb();
-    return d.collection(collection).insertOne(doc);
+    const db = await getDB();
+    return db.collection(collection).insertOne(doc);
 }
 
 async function findMany(collection, filter = {}, options = {}) {
-    const d = await getDb();
-    return d.collection(collection).find(filter, options).toArray();
+    const db = await getDB();
+    return db.collection(collection).find(filter, options).toArray();
 }
 
 async function findOne(collection, filter = {}) {
-    const d = await getDb();
-    return d.collection(collection).findOne(filter);
+    const db = await getDB();
+    return db.collection(collection).findOne(filter);
 }
 
 async function countDocs(collection, filter = {}) {
-    const d = await getDb();
-    return d.collection(collection).countDocuments(filter);
+    const db = await getDB();
+    return db.collection(collection).countDocuments(filter);
 }
 
-module.exports = { connect, getDb, close, insertOne, findMany, findOne, countDocs };
+module.exports = { connectDB, getDB, closeDB, insertOne, findMany, findOne, countDocs };

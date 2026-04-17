@@ -1,7 +1,10 @@
 "use strict";
 const { ENV } = require("./config");
 
-// ─── Core Gemini call ─────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+//  CORE GEMINI CALL
+// ─────────────────────────────────────────────────────────────
+
 async function geminiCall(prompt, maxTokens = 2048) {
     const res = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/${ENV.GEMINI_MODEL}:generateContent?key=${ENV.GEMINI_API_KEY}`,
@@ -10,229 +13,237 @@ async function geminiCall(prompt, maxTokens = 2048) {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 contents: [{ role: "user", parts: [{ text: prompt }] }],
-                generationConfig: { temperature: 0.2, maxOutputTokens: maxTokens },
+                generationConfig: {
+                    temperature: 0.15,   // lower = more consistent JSON
+                    maxOutputTokens: maxTokens,
+                    responseMimeType: "application/json",  // force JSON output
+                },
+                // Google Search grounding — gives Gemini access to today's real news
+                tools: [{ googleSearch: {} }],
             }),
         }
     );
+
     const json = await res.json();
     if (!res.ok) throw new Error(JSON.stringify(json?.error || json));
+
     const raw = json?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    // Strip accidental markdown fences
-    return raw.replace(/^```json\s*/m, "").replace(/^```\s*/m, "").replace(/```\s*$/m, "").trim();
+    // Strip any stray markdown fences Gemini adds despite responseMimeType
+    return raw.replace(/```json\s*/gi, "").replace(/```\s*/g, "").trim();
 }
 
-function safeParseJSON(raw, label) {
+function safeParse(raw, label) {
     try {
         return JSON.parse(raw);
-    } catch (e) {
-        console.warn(`  ⚠ Gemini ${label} JSON parse failed — storing raw`);
-        return { raw };
+    } catch {
+        // Try extracting first JSON object/array from response
+        const match = raw.match(/(\{[\s\S]*\}|\[[\s\S]*\])/);
+        if (match) {
+            try { return JSON.parse(match[1]); } catch { /* fall through */ }
+        }
+        console.warn(`  ⚠ Gemini ${label}: JSON parse failed`);
+        return { raw: raw.slice(0, 500) };
     }
 }
 
-// ─── Phase 1: Market Intelligence ─────────────────────────────
-async function getMarketIntelligence(today) {
-    const prompt = `You are a senior Pakistan Stock Exchange (PSX) macro analyst. Today is ${today}.
+// ─────────────────────────────────────────────────────────────
+//  PHASE 1 — Real-time market intelligence (with Google Search)
+// ─────────────────────────────────────────────────────────────
 
-Using your latest knowledge, provide a structured market intelligence briefing.
-Return ONLY valid JSON — no markdown, no preamble, no explanation:
+async function fetchMarketIntelligence(today) {
+    const prompt = `You are a senior Pakistan Stock Exchange (PSX/KSE-100) macro analyst. 
+Today is ${today}. Use Google Search to find TODAY'S actual data before answering.
 
+Search for: current Brent crude price, USD/PKR rate, KSE-100 index level, Pakistan SBP policy rate,
+Pakistan inflation CPI, Pakistan IMF program status, global market sentiment today.
+
+Return a single JSON object (no markdown, no text outside JSON):
 {
   "global": {
     "sentiment": "Risk-On | Risk-Off | Neutral",
-    "oil_brent_usd": "<current estimate>",
+    "oil_brent_usd": "<actual current price from search>",
+    "oil_wti_usd": "<actual>",
     "oil_trend": "Rising | Falling | Stable",
-    "usd_pkr": "<current estimate>",
-    "fed_stance": "Hawkish | Dovish | Neutral",
-    "us_10y_yield": "<estimate>",
+    "usd_pkr": "<actual rate>",
+    "fed_stance": "Hawkish | Dovish | Neutral | Pause",
+    "us_10y_yield": "<actual>",
     "em_flows": "Inflows | Outflows | Mixed",
-    "china_outlook": "Positive | Negative | Neutral",
-    "key_global_drivers": ["<driver1>", "<driver2>", "<driver3>"]
+    "china_growth": "Expanding | Contracting | Stable",
+    "key_global_drivers": ["<actual driver from today's news 1>", "<driver 2>", "<driver 3>"]
   },
   "pakistan": {
+    "kse100_level": "<actual today>",
     "kse100_trend": "Bullish | Bearish | Sideways",
-    "kse100_level": "<estimate>",
-    "sbp_policy_rate": "<rate>%",
-    "sbp_next_meeting": "<outlook: Cut Expected | Hold | Hike Risk>",
-    "inflation_cpi": "<estimate>%",
+    "kse100_change_pct": "<today's % change>",
+    "sbp_policy_rate": "<actual rate>",
+    "sbp_outlook": "Rate Cut Expected | Hold | Hike Risk",
+    "cpi_inflation": "<actual latest %>" ,
     "inflation_trend": "Falling | Stable | Rising",
-    "pkr_stability": "Stable | Depreciation Risk | Appreciation",
+    "pkr_outlook": "Stable | Depreciation Risk | Appreciation",
     "imf_program": "On Track | At Risk | Suspended",
-    "forex_reserves": "<estimate USD bn>",
+    "forex_reserves_usd_bn": "<actual>",
     "political_risk": "Low | Medium | High",
-    "key_risks": ["<risk1>", "<risk2>"],
-    "key_tailwinds": ["<tailwind1>", "<tailwind2>"]
+    "key_risks": ["<specific risk from today>", "<risk 2>"],
+    "key_tailwinds": ["<tailwind 1>", "<tailwind 2>"]
   },
   "sector_outlook": {
-    "Banking":      "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Oil & Gas":    "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Fertilizer":  "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Cement":      "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Energy":      "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Technology":  "<Bullish|Bearish|Neutral> — <one line reason>",
-    "Conglomerate":"<Bullish|Bearish|Neutral> — <one line reason>"
+    "Banking":      "<Bullish|Bearish|Neutral> — <specific reason mentioning SBP rate/spread>",
+    "Oil & Gas":    "<Bullish|Bearish|Neutral> — <mention gas prices/oil & domestic E&P>",
+    "Fertilizer":   "<Bullish|Bearish|Neutral> — <mention urea prices / gas tariffs>",
+    "Cement":       "<Bullish|Bearish|Neutral> — <mention construction activity / exports>",
+    "Energy":       "<Bullish|Bearish|Neutral> — <mention circular debt / power tariffs>",
+    "Technology":   "<Bullish|Bearish|Neutral> — <mention IT exports / PKR>",
+    "Conglomerate": "<Bullish|Bearish|Neutral> — <mention diversified exposure>"
   },
   "overall_stance": "Bullish | Bearish | Neutral",
-  "today_summary": "<1 crisp sentence: what is the single most important thing to know about markets today>"
+  "today_headline": "<single sentence: the ONE thing that matters most for PSX today>"
 }`;
 
-    const raw = await geminiCall(prompt, 1500);
-    return safeParseJSON(raw, "Phase1");
+    const raw = await geminiCall(prompt, 1800);
+    return safeParse(raw, "Phase1-MarketIntel");
 }
 
-// ─── Phase 2: Signal Validation ───────────────────────────────
-async function validateSignals(signals, stockSnapshot, summary, performance, today) {
-    const perfContext = performance
-        ? `Previous session accuracy: ${performance.accuracy}% (${performance.correct}/${performance.total} correct). Breakdown: ${JSON.stringify(performance.breakdown?.slice(0, 5))}`
-        : "No previous performance data available.";
+// ─────────────────────────────────────────────────────────────
+//  PHASE 2 — Signal validation + coaching (combined to save latency)
+// ─────────────────────────────────────────────────────────────
 
-    const prompt = `You are a senior PSX quantitative analyst. Today is ${today}.
-${perfContext}
+async function validateAndCoach(signals, snapshot, summary, performance, marketIntel, today) {
+    const perfCtx = performance
+        ? `Last session signal accuracy: ${performance.accuracy}% (${performance.correct}/${performance.total} correct). Per-stock: ${JSON.stringify(performance.breakdown?.slice(0, 5))}.`
+        : "No previous session data.";
 
-Portfolio Summary: ${JSON.stringify(summary)}
-Holdings & Technicals: ${JSON.stringify(stockSnapshot)}
-System-generated signals: ${JSON.stringify(signals)}
+    const marketCtx = marketIntel && !marketIntel.raw
+        ? `Today's macro: KSE-100 ${marketIntel.pakistan?.kse100_trend} at ${marketIntel.pakistan?.kse100_level}, Oil Brent $${marketIntel.global?.oil_brent_usd}, PKR/USD ${marketIntel.global?.usd_pkr}, SBP ${marketIntel.pakistan?.sbp_policy_rate} (${marketIntel.pakistan?.sbp_outlook}), IMF ${marketIntel.pakistan?.imf_program}.`
+        : "";
 
-Task: For each position, validate the algorithmic signal with your sector knowledge and macro context.
-Be specific — mention SBP rate impact on banks, gas prices on oil companies, urea prices on fertilizers, etc.
+    const prompt = `You are a dual-role PSX expert: senior quant analyst + retail investor coach.
+Today: ${today}. ${marketCtx}
+${perfCtx}
 
-Return ONLY valid JSON:
+Portfolio: ${JSON.stringify(summary)}
+Stock snapshot: ${JSON.stringify(snapshot)}
+Algorithmic signals: ${JSON.stringify(signals)}
+
+TASK: Perform TWO jobs in one JSON response.
+
+JOB 1 — ANALYST: Validate each signal using sector expertise.
+- For Banking: mention impact of SBP rate changes on NIMs and spreads.
+- For Oil & Gas: mention oil price direction and domestic gas allocation.
+- For Fertilizer: mention urea price trends and gas tariff impact.
+- For Cement: mention PSDP spending, construction demand, export margins.
+- For Technology: mention IT export growth, PKR stability impact.
+- For Energy: mention circular debt resolution / IPP dividends / power tariffs.
+- If you disagree with a signal, give a SPECIFIC alternate price level.
+
+JOB 2 — COACH: Explain each ACTIONABLE signal to a beginner (no jargon).
+- Use plain language like you're explaining to a first-time investor.
+- Include the specific PKR entry, target, and stop amounts.
+- Mention ONE specific thing to watch for that would cancel the trade.
+
+Return a single JSON object:
 {
   "portfolio_health": {
     "concentration_risk": "Low | Medium | High",
-    "concentration_detail": "<which sector/stock is overweight>",
-    "sector_balance_comment": "<brief assessment>",
-    "overall_pnl_comment": "<comment on portfolio's current P&L>",
-    "biggest_risk_position": "<SYMBOL> — <why>",
-    "best_positioned": "<SYMBOL> — <why>"
+    "concentration_detail": "<which sector/stock is overweight and by how much>",
+    "overall_pnl_comment": "<comment on current P&L situation>",
+    "best_positioned": "<SYMBOL> — <why this is the strongest hold>",
+    "biggest_risk": "<SYMBOL> — <why this needs monitoring>"
   },
   "validation": [
     {
-      "symbol": "<SYMBOL>",
-      "system_action": "<BUY|SELL|HOLD|STRONG_BUY|STRONG_SELL>",
+      "symbol": "MEBL",
+      "system_action": "BUY|SELL|HOLD|STRONG_BUY|STRONG_SELL",
       "verdict": "Agree | Disagree | Partially Agree",
       "conviction": "High | Medium | Low",
-      "reason": "<2-3 sentences combining technical + sector catalyst>",
+      "analyst_note": "<2-3 sentences: technical reading + sector-specific catalyst>",
       "alt_action": null,
-      "alt_limit_price": null,
-      "key_risk": "<main specific risk for this trade>",
-      "key_catalyst": "<specific event or condition that triggers the expected move>",
-      "time_horizon": "Short-term (1-3 days) | Medium (1-2 weeks) | Long-term (1-3 months)"
+      "alt_price": null,
+      "key_catalyst": "<specific named event or condition that triggers the move>",
+      "key_risk": "<specific named risk that kills this trade>",
+      "time_horizon": "1-3 days | 1-2 weeks | 1-3 months",
+      "beginner_explanation": "<2 sentences in simple English: what is happening and what exactly to do with PKR amounts>"
     }
   ],
-  "macro_portfolio_impact": "<how today's specific macro conditions affect THIS portfolio>",
-  "top_conviction_trade": "<SYMBOL> — <full sentence: why this is the single best trade today>",
-  "avoid_today": "<SYMBOL or null> — <why to avoid if applicable>",
+  "macro_impact_on_portfolio": "<how today's macro specifically affects THIS portfolio's mix of banking/oil/fertilizer/cement/tech>",
+  "top_trade_today": "<SYMBOL> — <one sentence: why this is the single best risk/reward trade right now>",
+  "avoid_today": "<SYMBOL or null> — <one sentence why to avoid if applicable>",
+  "daily_tip": "<one actionable tip specific to today's market conditions>",
+  "emotional_state": "Confident | Cautious | Patient | Defensive",
   "overall_stance": "Bullish | Bearish | Neutral"
 }`;
 
-    const raw = await geminiCall(prompt, 2500);
-    return safeParseJSON(raw, "Phase2");
+    const raw = await geminiCall(prompt, 3000);
+    return safeParse(raw, "Phase2-ValidateCoach");
 }
 
-// ─── Phase 3: Coaching Mode ────────────────────────────────────
-async function getCoachingInsights(signals, stockSnapshot, today) {
-    // Only coach on actionable signals
-    const actionable = Object.entries(signals)
-        .filter(([, s]) => s.action !== "HOLD" && s.action !== "SKIP")
-        .map(([sym, s]) => ({
-            symbol: sym,
-            action: s.action,
-            score: s.score,
-            bullSignals: s.bullSignals?.slice(0, 3),
-            bearSignals: s.bearSignals?.slice(0, 3),
-            price: s.price,
-            limitPrice: s.limitPrice,
-            targetPrice: s.targetPrice,
-            stopLoss: s.stopLoss,
-            rrRatio: s.rrRatio,
-            unrealizedPct: s.unrealizedPct,
-        }));
+// ─────────────────────────────────────────────────────────────
+//  MASTER FUNCTION
+// ─────────────────────────────────────────────────────────────
 
-    if (actionable.length === 0) return null;
-
-    const prompt = `You are a friendly yet expert PSX stock market coach. Today is ${today}.
-
-You have ${actionable.length} actionable signals for a Pakistani retail investor. Your job is to:
-1. Give a BEGINNER explanation for each signal (simple, clear, no jargon)
-2. Give a PRO-LEVEL chart narrative for each (use technical terms freely)
-3. Give overall portfolio coaching advice
-
-Return ONLY valid JSON:
-{
-  "coaching": [
-    {
-      "symbol": "<SYMBOL>",
-      "beginner": "<2-3 sentences in plain Urdu/English mix or just English — explain what is happening and what to do, like explaining to a friend who just started investing. No technical jargon. Use PKR amounts.>",
-      "pro_narrative": "<2-3 sentences using technical analysis language — mention specific indicator readings, price action context, and what confirmation to wait for>",
-      "risk_warning": "<one sentence specific risk to be aware of>",
-      "best_entry_timing": "Market Open | Wait for Dip | End of Day | Specific condition"
-    }
-  ],
-  "daily_coaching_tip": "<one universal tip for today's market conditions that applies to this portfolio>",
-  "emotional_check": "<brief comment on whether investor should be feeling cautious, confident, or patient today>"
-}`;
-
-    const raw = await geminiCall(prompt, 1500);
-    return safeParseJSON(raw, "Phase3");
-}
-
-// ─── Master function ───────────────────────────────────────────
 async function getGeminiInsight(stockData, signals, summary, performance, today) {
     if (!ENV.GEMINI_ENABLED || !ENV.GEMINI_API_KEY) {
-        console.log("  ⚠ Gemini disabled or no API key");
+        console.log("  ⚠ Gemini disabled");
         return null;
     }
 
-    // Build compact snapshot for Gemini (avoid sending full raw data)
-    const stockSnapshot = Object.entries(stockData)
+    // Compact snapshot for Gemini (only what it needs)
+    const snapshot = Object.entries(stockData)
         .filter(([, d]) => !d.error && d.price)
-        .map(([t, d]) => ({
-            symbol: t.replace(".KA", ""),
+        .map(([ticker, d]) => ({
+            symbol: ticker.replace(".KA", ""),
             sector: d.sector,
             price: d.price,
-            avg_cost: d.avg_cost,
+            avgCost: d.avgCost,
             unrealizedPct: d.unrealizedPct,
             rsi14: d.rsi14,
             trend: d.trend,
-            adx: d.adx?.adx,
-            adxTrend: d.adx?.trend,
+            adxVal: d.adx?.adx,
+            adxStrength: d.adx?.strength,
             macdCross: d.macd?.crossover,
             stochK: d.stoch?.k,
-            ichiPosition: d.ichi?.position,
-            perf6m: d.perf6m,
-            perf1m: d.perf1m,
-            perf1w: d.perf1w,
-            high6m: d.high6m,
-            low6m: d.low6m,
-            maxDrawdown: d.maxDrawdown,
+            stochZone: d.stoch?.zone,
+            ichiPos: d.ichi?.position,
+            vwap: d.vwap,
             obvTrend: d.obv?.trend,
-            volRatio: d.volRatio,
+            bb_pctB: d.bb?.pctB,
+            bbSqueeze: d.bb?.squeeze,
+            willR: d.willR,
+            cci: d.cci,
             patterns: d.patterns?.map(p => p.name),
+            divergence: d.divergence,
+            perf1w: d.perf1w,
+            perf1m: d.perf1m,
+            perf6m: d.perf6m,
             pivotS1: d.pivots?.s1,
             pivotR1: d.pivots?.r1,
+            volRatio: d.vol?.volRatio,
+            maxDrawdown: d.maxDrawdown,
         }));
 
     let market = null;
     let analysis = null;
-    let coaching = null;
 
     try {
-        console.log("  → Phase 1: Market intelligence...");
-        market = await getMarketIntelligence(today);
-    } catch (e) { console.error("  ✗ Phase 1:", e.message); }
+        console.log("  → Phase 1: Market intelligence (Google Search grounding)...");
+        market = await fetchMarketIntelligence(today);
+        if (market && !market.raw) {
+            console.log(`    KSE-100: ${market.pakistan?.kse100_level} | Oil: $${market.global?.oil_brent_usd} | PKR/USD: ${market.global?.usd_pkr}`);
+        }
+    } catch (err) {
+        console.error("  ✗ Phase 1:", err.message);
+    }
 
     try {
-        console.log("  → Phase 2: Signal validation...");
-        analysis = await validateSignals(signals, stockSnapshot, summary, performance, today);
-    } catch (e) { console.error("  ✗ Phase 2:", e.message); }
+        console.log("  → Phase 2: Signal validation + coaching...");
+        analysis = await validateAndCoach(signals, snapshot, summary, performance, market, today);
+        if (analysis && !analysis.raw) {
+            console.log(`    Stance: ${analysis.overall_stance} | Top trade: ${analysis.top_trade_today?.split("—")[0]?.trim()}`);
+        }
+    } catch (err) {
+        console.error("  ✗ Phase 2:", err.message);
+    }
 
-    try {
-        console.log("  → Phase 3: Coaching mode...");
-        coaching = await getCoachingInsights(signals, stockSnapshot, today);
-    } catch (e) { console.error("  ✗ Phase 3:", e.message); }
-
-    return { market, analysis, coaching };
+    return { market, analysis };
 }
 
 module.exports = { getGeminiInsight };

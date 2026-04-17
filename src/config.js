@@ -2,7 +2,6 @@
 require("dotenv").config();
 
 // ─── Environment ──────────────────────────────────────────────
-console.log(process.env);
 const ENV = {
     MONGODB_URI: process.env.MONGODB_URI || "",
     MONGODB_DB: process.env.MONGODB_DB || "psx_agent",

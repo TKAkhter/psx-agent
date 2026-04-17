@@ -3,10 +3,10 @@ require("dotenv").config();
 
 const ENV = {
     MONGODB_URI: process.env.MONGODB_URI || "",
-    MONGODB_DB: process.env.MONGODB_DB || "psx-agent",
-    TWILIO_ENABLED: process.env.TWILIO_ENABLED === "true",
-    EMAIL_ENABLED: process.env.EMAIL_ENABLED === "true",
-    GEMINI_ENABLED: process.env.GEMINI_ENABLED === "true",
+    MONGODB_DB: process.env.MONGODB_DB || "psx_agent",
+    TWILIO_ENABLED: process.env.TWILIO_ENABLED === "false",
+    EMAIL_ENABLED: process.env.EMAIL_ENABLED === "false",
+    GEMINI_ENABLED: process.env.GEMINI_ENABLED === "false",
     TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID || "",
     TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN || "",
     TWILIO_FROM: process.env.TWILIO_FROM || "",

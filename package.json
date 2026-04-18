@@ -1,12 +1,12 @@
 {
   "name": "psx-agent",
-  "version": "2.5.0",
-  "description": "PSX Trading Agent — structured, AI-powered, fully featured",
+  "version": "3.0.0",
+  "description": "PSX Trading Agent — PSXTerminal.com real-time + Yahoo fallback + Gemini AI",
   "main": "index.js",
   "scripts": {
-    "build": "ncc build src/index.js -o dist",
-    "start": "node dist/index.js",
-    "dev": "node src/index.js"
+    "build": "ncc build index.js -o dist",
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "author": "",
   "license": "ISC",

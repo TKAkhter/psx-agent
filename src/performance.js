@@ -12,6 +12,7 @@ async function evaluatePerformance(currentData) {
         const breakdown = [];
 
         for (const [ticker, curr] of Object.entries(currentData)) {
+            if (ticker === "__market__") continue;
             if (!curr.price || curr.error) continue;
             const sym = ticker.replace(".KA", "");
             const prevSig = prev.signals?.[sym];
@@ -41,6 +42,7 @@ async function evaluatePerformance(currentData) {
 async function saveSession(signals, summary, stockData, geminiStance) {
     const snapshot = {};
     for (const [ticker, d] of Object.entries(stockData)) {
+        if (ticker === "__market__") continue;
         if (!d.price || d.error) continue;
         snapshot[ticker.replace(".KA", "")] = { price: d.price, unrealizedPct: d.unrealizedPct };
     }

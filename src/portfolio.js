@@ -1,8 +1,9 @@
 "use strict";
-const { DEFAULT_PORTFOLIO } = require("./config");
+const { DEFAULT_PORTFOLIO, ENV } = require("./config");
 const db = require("./db");
 
 const COLLECTION = "portfolio";
+const PORTFOLIO_TYPE = ENV.PORTFOLIO_TYPE;
 
 /**
  * Load portfolio from MongoDB.
@@ -10,7 +11,8 @@ const COLLECTION = "portfolio";
  * Returns array of position documents.
  */
 async function loadPortfolio() {
-    const count = await db.countDocs(COLLECTION);
+    const count = await db.countDocs(COLLECTION, { type: PORTFOLIO_TYPE });
+    // const count = await db.countDocs(COLLECTION);
 
     if (count === 0) {
         console.log("  ℹ  Portfolio empty — seeding defaults...");
@@ -25,7 +27,10 @@ async function loadPortfolio() {
         console.log(`  ✓  Seeded ${docs.length} positions`);
     }
 
-    const positions = await db.findMany(COLLECTION, { active: { $ne: false } });
+    const positions = await db.findMany(COLLECTION, {
+        active: { $ne: false },
+        type: PORTFOLIO_TYPE
+    });
     console.log(`  ✓  ${positions.length} positions loaded`);
     return positions;
 }

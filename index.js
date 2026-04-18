@@ -1,17 +1,17 @@
 "use strict";
 const moment = require("moment-timezone");
 
-const db = require("./db");
-const { loadPortfolio, buildPortfolioMap } = require("./portfolio");
-const { fetchAllStocks } = require("./fetch-data");
-const { getSignals, calcPortfolioSummary } = require("./signals");
-const { getGeminiInsight } = require("./gemini");
-const { evaluatePerformance, saveSession } = require("./performance");
-const { buildHtmlEmail } = require("./templates/email-template");
-const { buildWhatsAppMessage } = require("./templates/whatsapp-template");
-const { sendEmail } = require("./notify/email");
-const { sendWhatsApp } = require("./notify/whatsapp");
-const { ENV } = require("./config");
+const db = require("./src/db");
+const { loadPortfolio, buildPortfolioMap } = require("./src/portfolio");
+const { fetchAllStocks } = require("./src/fetch-data");
+const { getSignals, calcPortfolioSummary } = require("./src/signals");
+const { getGeminiInsight } = require("./src/gemini");
+const { evaluatePerformance, saveSession } = require("./src/performance");
+const { buildHtmlEmail } = require("./src/templates/email-template");
+const { buildWhatsAppMessage } = require("./src/templates/whatsapp-template");
+const { sendEmail } = require("./src/notify/email");
+const { sendWhatsApp } = require("./src/notify/whatsapp");
+const { ENV } = require("./src/config");
 
 // ─────────────────────────────────────────────────────────────
 //  TIME
@@ -32,7 +32,7 @@ const head = (label) => console.log(`\n${LINE}\n  ${label}\n${LINE}`);
 //  CONSOLE SIGNAL SUMMARY
 // ─────────────────────────────────────────────────────────────
 function printSummary(signals, summary, gemini) {
-    const { expandAnalysis, expandMarket } = require("./gemini");
+    const { expandAnalysis, expandMarket } = require("./src/gemini");
     const a = expandAnalysis(gemini?.analysis);
     const m = expandMarket(gemini?.market);
 

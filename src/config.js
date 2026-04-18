@@ -5,18 +5,31 @@ require("dotenv").config();
 const ENV = {
     MONGODB_URI: process.env.MONGODB_URI || "",
     MONGODB_DB: process.env.MONGODB_DB || "psx_agent",
+
     TWILIO_ENABLED: process.env.TWILIO_ENABLED === "true",
     EMAIL_ENABLED: process.env.EMAIL_ENABLED === "true",
     GEMINI_ENABLED: process.env.GEMINI_ENABLED === "true",
+
     TWILIO_ACCOUNT_SID: process.env.TWILIO_ACCOUNT_SID || "",
     TWILIO_AUTH_TOKEN: process.env.TWILIO_AUTH_TOKEN || "",
     TWILIO_FROM: process.env.TWILIO_FROM || "",
     TWILIO_TO: process.env.TWILIO_TO || "",
+
     EMAIL_USER: process.env.EMAIL_USER || "",
     EMAIL_PASS: process.env.EMAIL_PASS || "",
     EMAIL_TO: process.env.EMAIL_TO || "",
+
     GEMINI_API_KEY: process.env.GEMINI_API_KEY || "",
     GEMINI_MODEL: process.env.GEMINI_MODEL || "gemini-2.5-flash-preview-04-17",
+
+    // Data sources
+    PSX_BASE_URL: process.env.PSX_BASE_URL || "https://psxterminal.com",
+    PORTFOLIO_TYPE: process.env.PORTFOLIO_TYPE || "psx",
+    YAHOO_FALLBACK: process.env.YAHOO_FALLBACK !== "false",
+
+    // UI theme: "dark" (default) or "light"
+    EMAIL_THEME: process.env.EMAIL_THEME === "light" ? "light" : "dark",
+
     TIMEZONE: "Asia/Karachi",
 };
 
@@ -40,18 +53,22 @@ const RSI_LEVELS = Object.freeze({
     EXTREME_OVERBOUGHT: 80,
 });
 
+// ─── PSX market hours (PKT) ───────────────────────────────────
+// Monday-Friday, 09:30–15:30 PKT
+const MARKET_HOURS = Object.freeze({ open: 9.5, close: 15.5 }); // in fractional hours PKT
+
 // ─── Default portfolio — seeded once to MongoDB ───────────────
 const DEFAULT_PORTFOLIO = Object.freeze([
-    { symbol: "MEBL", ticker: "MEBL.KA", shares: 1150, avgCost: 429.93, name: "Meezan Bank", sector: "Banking" },
-    { symbol: "OGDC", ticker: "OGDC.KA", shares: 1100, avgCost: 266.29, name: "OGDC", sector: "Oil & Gas" },
-    { symbol: "HUBC", ticker: "HUBC.KA", shares: 1100, avgCost: 191.85, name: "Hub Power", sector: "Energy" },
-    { symbol: "EFERT", ticker: "EFERT.KA", shares: 900, avgCost: 202.37, name: "Engro Fertilizer", sector: "Fertilizer" },
-    { symbol: "ENGROH", ticker: "ENGROH.KA", shares: 400, avgCost: 279.51, name: "Engro Holdings", sector: "Conglomerate" },
-    { symbol: "FFC", ticker: "FFC.KA", shares: 400, avgCost: 507.94, name: "Fauji Fertilizer", sector: "Fertilizer" },
-    { symbol: "LUCK", ticker: "LUCK.KA", shares: 300, avgCost: 378.70, name: "Lucky Cement", sector: "Cement" },
-    { symbol: "MARI", ticker: "MARI.KA", shares: 200, avgCost: 635.00, name: "Mari Petroleum", sector: "Oil & Gas" },
-    { symbol: "POL", ticker: "POL.KA", shares: 200, avgCost: 639.18, name: "Pakistan Oilfields", sector: "Oil & Gas" },
-    { symbol: "SYS", ticker: "SYS.KA", shares: 750, avgCost: 137.25, name: "Systems Ltd", sector: "Technology" },
+    { symbol: "MEBL", ticker: "MEBL", shares: 1150, avgCost: 429.93, name: "Meezan Bank", sector: "Banking", type: "psx" },
+    { symbol: "OGDC", ticker: "OGDC", shares: 1100, avgCost: 266.29, name: "OGDC", sector: "Oil & Gas", type: "psx" },
+    { symbol: "HUBC", ticker: "HUBC", shares: 1100, avgCost: 191.85, name: "Hub Power", sector: "Energy", type: "psx" },
+    { symbol: "EFERT", ticker: "EFERT", shares: 900, avgCost: 202.37, name: "Engro Fertilizer", sector: "Fertilizer", type: "psx" },
+    { symbol: "ENGROH", ticker: "ENGROH", shares: 400, avgCost: 279.51, name: "Engro Holdings", sector: "Conglomerate", type: "psx" },
+    { symbol: "FFC", ticker: "FFC", shares: 400, avgCost: 507.94, name: "Fauji Fertilizer", sector: "Fertilizer", type: "psx" },
+    { symbol: "LUCK", ticker: "LUCK", shares: 300, avgCost: 378.70, name: "Lucky Cement", sector: "Cement", type: "psx" },
+    { symbol: "MARI", ticker: "MARI", shares: 200, avgCost: 635.00, name: "Mari Petroleum", sector: "Oil & Gas", type: "psx" },
+    { symbol: "POL", ticker: "POL", shares: 200, avgCost: 639.18, name: "Pakistan Oilfields", sector: "Oil & Gas", type: "psx" },
+    { symbol: "SYS", ticker: "SYS", shares: 750, avgCost: 137.25, name: "Systems Ltd", sector: "Technology", type: "psx" },
 ]);
 
-module.exports = { ENV, SIGNAL_THRESHOLDS, RSI_LEVELS, DEFAULT_PORTFOLIO };
+module.exports = { ENV, SIGNAL_THRESHOLDS, RSI_LEVELS, MARKET_HOURS, DEFAULT_PORTFOLIO };

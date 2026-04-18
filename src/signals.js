@@ -381,6 +381,7 @@ function buildSignal(ticker, d) {
 function getSignals(stockData) {
     const signals = {};
     for (const [ticker, d] of Object.entries(stockData)) {
+        if (ticker === "__market__") continue;   // skip market-context sentinel
         signals[ticker.replace(".KA", "")] = buildSignal(ticker, d);
     }
     return signals;
@@ -394,7 +395,8 @@ function calcPortfolioSummary(stockData) {
     let totalCost = 0, totalValue = 0;
     const sectorMap = {};
 
-    for (const d of Object.values(stockData)) {
+    for (const [key, d] of Object.entries(stockData)) {
+        if (key === "__market__") continue;  // skip sentinel
         if (!d.price || d.error) continue;
         totalCost += d.costBasis || 0;
         totalValue += d.marketValue || 0;

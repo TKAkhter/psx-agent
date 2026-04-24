@@ -1,29 +1,50 @@
 {
   "name": "psx-agent",
   "version": "4.0.0",
-  "description": "PSX Trading Agent — TypeScript, PSXTerminal, Gemini AI, Meta WhatsApp",
+  "description": "AI-powered PSX portfolio analysis system",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
-    "clean": "rm -rf dist"
+    "start": "node dist/index.js --run-now",
+    "dev": "ts-node src/index.ts --run-now",
+    "dev:watch": "ts-node-dev --respawn src/index.ts",
+    "lint": "eslint src --ext .ts",
+    "test": "jest"
   },
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "axios": "^1.7.9",
-    "dotenv": "^17.4.1",
-    "moment-timezone": "^0.6.1",
-    "mongodb": "^6.21.0",
-    "nodemailer": "^8.0.5",
-    "yahoo-finance2": "^3.14.0"
+    "@anthropic-ai/sdk": "^0.20.0",
+    "axios": "^1.6.0",
+    "axios-retry": "^4.0.0",
+    "bottleneck": "^2.19.5",
+    "cheerio": "^1.0.0-rc.12",
+    "cron": "^3.1.6",
+    "date-fns": "^3.3.1",
+    "dotenv": "^16.4.1",
+    "handlebars": "^4.7.8",
+    "joi": "^17.12.1",
+    "lodash": "^4.17.21",
+    "natural": "^6.10.4",
+    "nodemailer": "^6.9.9",
+    "openai": "^4.28.0",
+    "p-limit": "^3.1.0",
+    "p-retry": "^4.6.2",
+    "pg": "^8.11.3",
+    "pino": "^8.18.0",
+    "pino-pretty": "^10.3.1",
+    "rss-parser": "^3.13.0",
+    "technicalindicators": "^3.1.0",
+    "twilio": "^5.0.3",
+    "uuid": "^9.0.0",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/moment-timezone": "^0.5.30",
-    "@types/node": "^22.10.0",
-    "@types/nodemailer": "^6.4.17",
+    "@types/lodash": "^4.14.202",
+    "@types/node": "^20.11.5",
+    "@types/nodemailer": "^6.4.14",
+    "@types/pg": "^8.11.0",
+    "@types/uuid": "^9.0.7",
     "ts-node": "^10.9.2",
-    "typescript": "^5.7.2"
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.3.3"
   }
 }

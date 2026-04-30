@@ -1,0 +1,27 @@
+services:
+  - type: cron
+    name: psx-analyzer
+    runtime: docker
+    schedule: "0 9 * * 1-5"       # 9:00 AM UTC+5 (PKT) weekdays — adjust to UTC
+    # PKT is UTC+5, so 9am PKT = 4am UTC
+    # schedule: "0 4 * * 1-5"     # use this for production
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: AI_MODEL
+        value: claude
+      - key: SHARIAH_MODE
+        value: compliant
+      - key: INDEX_FILTER
+        value: KSE-100
+      - key: NOTIFY_EMAIL
+        value: "true"
+      - key: NOTIFY_WHATSAPP
+        value: "false"
+      - key: NODE_ENV
+        value: production
+      - key: TZ
+        value: Asia/Karachi

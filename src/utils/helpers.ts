@@ -1,81 +1,40 @@
-/**
- * Normalise a value from [inMin, inMax] to [outMin, outMax]
- */
-export function normalise(value: number, inMin: number, inMax: number, outMin: number, outMax: number): number {
-  const clamped = Math.max(inMin, Math.min(inMax, value));
-  return outMin + ((clamped - inMin) / (inMax - inMin)) * (outMax - outMin);
+export const round  = (v: number, d = 2) => Math.round(v * 10**d) / 10**d;
+export const clamp  = (v: number, min: number, max: number) => Math.max(min, Math.min(max, v));
+export const safePct = (a: number, b: number) => b === 0 ? 0 : (a / b) * 100;
+export const safeDiv = (a: number, b: number) => b === 0 ? 0 : a / b;
+
+export function normalise(v: number, inMin: number, inMax: number, outMin = 0, outMax = 100): number {
+  return outMin + (clamp(v, inMin, inMax) - inMin) / (inMax - inMin) * (outMax - outMin);
 }
 
-/**
- * Safe division - returns 0 if denominator is 0
- */
-export function safeDivide(numerator: number, denominator: number): number {
-  return denominator === 0 ? 0 : numerator / denominator;
-}
-
-/**
- * Round to N decimal places
- */
-export function round(value: number, decimals = 2): number {
-  return Math.round(value * 10 ** decimals) / 10 ** decimals;
-}
-
-/**
- * Parse boolean from string env var
- */
-export function parseBool(value: string | undefined, defaultValue = false): boolean {
-  if (value === undefined) return defaultValue;
-  return value.toLowerCase() === 'true';
-}
-
-/**
- * Chunk an array into batches
- */
-export function chunk<T>(array: T[], size: number): T[][] {
-  const chunks: T[][] = [];
-  for (let i = 0; i < array.length; i += size) {
-    chunks.push(array.slice(i, i + size));
-  }
-  return chunks;
-}
-
-/**
- * Sleep for ms milliseconds
- */
-export function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Format PKR value
- */
-export function formatPkr(value: number): string {
-  return `PKR ${value.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
-
-/**
- * Format percentage
- */
-export function formatPct(value: number): string {
-  const sign = value >= 0 ? '+' : '';
-  return `${sign}${value.toFixed(2)}%`;
-}
-
-/**
- * Exponential decay for recency weighting
- * hoursAgo=0 => weight=1, hoursAgo=24 => weight≈0.37
- */
 export function recencyDecay(publishedAt: Date): number {
-  const hoursAgo = (Date.now() - publishedAt.getTime()) / 3_600_000;
-  return Math.exp(-hoursAgo / 24);
+  return Math.exp(-(Date.now() - publishedAt.getTime()) / (24 * 3_600_000));
 }
 
-/**
- * Weighted average
- */
-export function weightedAverage(values: number[], weights: number[]): number {
-  if (values.length === 0) return 0;
-  const totalWeight = weights.reduce((a, b) => a + b, 0);
-  if (totalWeight === 0) return 0;
-  return values.reduce((sum, v, i) => sum + v * weights[i], 0) / totalWeight;
+export function weightedAvg(values: number[], weights: number[]): number {
+  const total = weights.reduce((s, w) => s + w, 0);
+  return total === 0 ? 0 : values.reduce((s, v, i) => s + v * weights[i], 0) / total;
 }
+
+export function formatPkr(v: number): string {
+  return `PKR ${v.toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
+export function formatPct(v: number, decimals = 2): string {
+  return `${v >= 0 ? '+' : ''}${v.toFixed(decimals)}%`;
+}
+
+export function scoreGrade(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
+  if (score >= 80) return 'A';
+  if (score >= 65) return 'B';
+  if (score >= 50) return 'C';
+  if (score >= 35) return 'D';
+  return 'F';
+}
+
+export function signalLabel(signal: string, score: number): string {
+  const conf = score >= 75 ? 'High Conviction' : score >= 55 ? 'Moderate' : 'Low Conviction';
+  return `${signal.replace('_', ' ')} — ${conf}`;
+}
+
+export function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }

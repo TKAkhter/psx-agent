@@ -1,165 +1,227 @@
 import { CONFIG } from '../config';
-import { normalise, round, safeDivide } from '../utils/helpers';
+import { normalise, round, safeDiv, scoreGrade, signalLabel } from '../utils/helpers';
 import type {
   TechnicalIndicators, SignalResult, FundamentalData,
-  SentimentResult, MacroSnapshot, CompositeScore, PriceTargets, PositionSizing,
+  SentimentResult, MacroSnapshot, CompositeScore, PriceTargets, PositionSizing, Signal,
 } from '../types';
 
-// ─── Fundamental Scorer ───────────────────────────────────────────────────────
-
+// ─── Fundamental Score (0–100) ────────────────────────────────────────────────
 function scoreFundamentals(f: FundamentalData): number {
-  let score = 50; // base
-
-  // P/E vs sector (lower is better for value)
-  if (f.sectorAvgPe > 0) {
-    const peRatio = safeDivide(f.peRatio, f.sectorAvgPe);
-    if (peRatio < 0.8) score += 15;
-    else if (peRatio < 1.0) score += 8;
-    else if (peRatio > 1.3) score -= 10;
-    else if (peRatio > 1.5) score -= 20;
-  }
-
-  // Dividend yield (higher is better)
-  if (f.dividendYieldPct > 10) score += 15;
-  else if (f.dividendYieldPct > 6) score += 8;
-  else if (f.dividendYieldPct < 2) score -= 5;
-
-  // ROE (higher is better)
-  if (f.roe > 25) score += 12;
-  else if (f.roe > 15) score += 6;
-  else if (f.roe < 8) score -= 10;
-
-  // Debt-to-equity (lower is better)
-  if (f.debtToEquity < 0.3) score += 8;
-  else if (f.debtToEquity > 1.5) score -= 10;
-  else if (f.debtToEquity > 3.0) score -= 20;
-
-  // Revenue growth
-  if (f.revenueGrowthYoy > 20) score += 10;
-  else if (f.revenueGrowthYoy > 10) score += 5;
-  else if (f.revenueGrowthYoy < -10) score -= 15;
-
-  // Interest coverage
-  if (f.interestCoverageRatio > 5) score += 5;
-  else if (f.interestCoverageRatio < 1.5) score -= 15;
-
-  return Math.max(0, Math.min(100, score));
-}
-
-// ─── Macro Scorer ─────────────────────────────────────────────────────────────
-
-function scoreMacro(macro: MacroSnapshot): number {
   let score = 50;
 
-  // PKR stability (open vs official spread)
-  const pkrSpreadPct = Math.abs(macro.pkrUsdOpen - macro.pkrUsdOfficial) / macro.pkrUsdOfficial * 100;
-  if (pkrSpreadPct < 1) score += 10;
-  else if (pkrSpreadPct > 3) score -= 15;
-  else if (pkrSpreadPct > 5) score -= 25;
+  // ── Valuation ──────────────────────────────────────────────────────────────
+  // P/E vs sector: discount to sector is bullish
+  if (f.sectorAvgPe > 0) {
+    const peRel = safeDiv(f.peRatioTtm, f.sectorAvgPe);
+    if (peRel < 0.6)       score += 18;
+    else if (peRel < 0.8)  score += 12;
+    else if (peRel < 1.0)  score += 6;
+    else if (peRel > 1.5)  score -= 10;
+    else if (peRel > 2.0)  score -= 20;
+  }
+  // P/B: below book value = strong value signal
+  if (f.pbRatio < 1.0)      score += 10;
+  else if (f.pbRatio < 1.5) score += 5;
+  else if (f.pbRatio > 4.0) score -= 8;
+  // EV/EBITDA
+  if (f.evEbitda < 5)        score += 8;
+  else if (f.evEbitda > 12)  score -= 8;
+  // FCF yield
+  if (f.freeCashFlowYield > 8)  score += 10;
+  else if (f.freeCashFlowYield > 5) score += 5;
+  else if (f.freeCashFlowYield < 0) score -= 10;
 
-  // SBP policy rate (lower rates = better for equities)
-  if (macro.sbpPolicyRate < 15) score += 15;
-  else if (macro.sbpPolicyRate < 18) score += 5;
-  else if (macro.sbpPolicyRate > 20) score -= 10;
-  else if (macro.sbpPolicyRate > 22) score -= 20;
+  // ── Profitability ──────────────────────────────────────────────────────────
+  if (f.roeTtm > 30)        score += 12;
+  else if (f.roeTtm > 20)   score += 8;
+  else if (f.roeTtm > 12)   score += 4;
+  else if (f.roeTtm < 8)    score -= 8;
 
-  // FPI flows
-  if (macro.fpiDirection === 'inflow')  score += 12;
-  if (macro.fpiDirection === 'outflow') score -= 12;
+  if (f.roicTtm > 20)       score += 6;
+  else if (f.roicTtm < 8)   score -= 6;
 
-  // KSE-100 market momentum
-  if (macro.kse100ChangePct > 1.0) score += 8;
-  else if (macro.kse100ChangePct < -2.0) score -= 15;
+  if (f.netProfitMarginPct > 25) score += 8;
+  else if (f.netProfitMarginPct > 15) score += 4;
+  else if (f.netProfitMarginPct < 5)  score -= 8;
 
-  // CPI (lower inflation = better)
-  if (macro.pakistanCpi < 10) score += 10;
-  else if (macro.pakistanCpi > 25) score -= 15;
-  else if (macro.pakistanCpi > 30) score -= 25;
+  // ── Growth ─────────────────────────────────────────────────────────────────
+  if (f.earningsGrowthYoy > 25) score += 10;
+  else if (f.earningsGrowthYoy > 10) score += 5;
+  else if (f.earningsGrowthYoy < -15) score -= 12;
 
-  // IMF positive signal
-  if (macro.imfStatus.toLowerCase().includes('track')) score += 8;
-  if (macro.imfStatus.toLowerCase().includes('default') ||
-      macro.imfStatus.toLowerCase().includes('breach')) score -= 20;
+  if (f.revenueGrowthYoy > 20)  score += 6;
+  else if (f.revenueGrowthYoy < -10) score -= 8;
+
+  if (f.epsGrowthYoy > 15) score += 5;
+  else if (f.epsGrowthYoy < -10) score -= 5;
+
+  // ── Dividends (PSX investors highly value yield) ──────────────────────────
+  if (f.dividendYieldPct > 12)  score += 14;
+  else if (f.dividendYieldPct > 8)  score += 10;
+  else if (f.dividendYieldPct > 5)  score += 6;
+  else if (f.dividendYieldPct < 2)  score -= 4;
+
+  if (f.consecutiveDividendYears > 10) score += 8;
+  else if (f.consecutiveDividendYears > 5) score += 4;
+
+  // ── Balance Sheet ──────────────────────────────────────────────────────────
+  if (f.debtToEquity < 0.2)      score += 8;
+  else if (f.debtToEquity < 0.5) score += 4;
+  else if (f.debtToEquity > 2.0) score -= 10;
+  else if (f.debtToEquity > 4.0) score -= 20;
+
+  if (f.currentRatio > 2.0)      score += 6;
+  else if (f.currentRatio < 1.0) score -= 10;
+
+  if (f.interestCoverageRatio > 8)   score += 6;
+  else if (f.interestCoverageRatio < 2) score -= 12;
+  else if (f.interestCoverageRatio < 1) score -= 20;
+
+  if (f.netDebtToEbitda < 0)       score += 8;  // net cash position
+  else if (f.netDebtToEbitda > 3)  score -= 10;
 
   return Math.max(0, Math.min(100, score));
 }
 
-// ─── Main Composite Score ─────────────────────────────────────────────────────
+// ─── Macro Score (0–100) ──────────────────────────────────────────────────────
+function scoreMacro(m: MacroSnapshot): number {
+  let score = 50;
 
+  // PKR stability
+  const pkrSpread = Math.abs(m.pkrUsdOpen - m.pkrUsdOfficial) / m.pkrUsdOfficial * 100;
+  if (m.pkrTrend === 'appreciating') score += 12;
+  else if (m.pkrTrend === 'depreciating') score -= 15;
+  if (pkrSpread > 4) score -= 12;
+
+  // SBP rate cycle
+  if (m.sbpRateTrend === 'cutting')  score += 15;
+  else if (m.sbpRateTrend === 'hiking') score -= 12;
+  if (m.sbpPolicyRate > 22) score -= 15;
+  else if (m.sbpPolicyRate < 16) score += 12;
+
+  // FPI flows
+  if (m.fpiDirection === 'inflow')  score += 12;
+  if (m.fpiDirection === 'outflow') score -= 10;
+
+  // Index momentum
+  if (m.kse100ChangePct > 1.5)  score += 10;
+  else if (m.kse100ChangePct < -2) score -= 12;
+  if (m.kse100Ytd > 15) score += 6;
+
+  // Inflation
+  if (m.pakistanCpi < 10)   score += 12;
+  else if (m.pakistanCpi > 25) score -= 12;
+  else if (m.pakistanCpi > 30) score -= 20;
+
+  // IMF / external support
+  if (m.imfProgrammeActive)  score += 10;
+  if (/default|crisis|halt/i.test(m.imfStatus)) score -= 25;
+  if (/disburse|approved|track/i.test(m.imfStatus)) score += 8;
+
+  // Commodity context (broadly positive for PSX energy names)
+  if (m.brentCrude > 90)     score += 5;   // good for OGDC/MARI/POL
+  else if (m.brentCrude < 65) score -= 5;
+
+  return Math.max(0, Math.min(100, score));
+}
+
+// ─── Composite Score ──────────────────────────────────────────────────────────
 export function computeCompositeScore(
   signalResult: SignalResult,
-  sentiment: SentimentResult,
+  sentiment:    SentimentResult,
   fundamentals: FundamentalData,
-  macro: MacroSnapshot
+  macro:        MacroSnapshot,
 ): CompositeScore {
-  const technicalScore    = normalise(signalResult.convictionScore, -8, 8, 0, 100);
-  const sentimentScore    = normalise(sentiment.score, -1, 1, 0, 100);
-  const fundamentalScore  = scoreFundamentals(fundamentals);
-  const macroScore        = scoreMacro(macro);
+  const technical   = round(normalise(signalResult.convictionScore, -10, 10));
+  const sentScore   = round(normalise(sentiment.score, -1, 1));
+  const fundamental = round(scoreFundamentals(fundamentals));
+  const macroScore  = round(scoreMacro(macro));
 
-  const composite =
-    technicalScore    * CONFIG.WEIGHTS.TECHNICAL   +
-    sentimentScore    * CONFIG.WEIGHTS.SENTIMENT   +
-    fundamentalScore  * CONFIG.WEIGHTS.FUNDAMENTAL +
-    macroScore        * CONFIG.WEIGHTS.MACRO;
+  const composite = round(
+    technical   * CONFIG.WEIGHTS.TECHNICAL   +
+    sentScore   * CONFIG.WEIGHTS.SENTIMENT   +
+    fundamental * CONFIG.WEIGHTS.FUNDAMENTAL +
+    macroScore  * CONFIG.WEIGHTS.MACRO,
+  );
 
-  return {
-    technical:    round(technicalScore),
-    sentiment:    round(sentimentScore),
-    fundamental:  round(fundamentalScore),
-    macro:        round(macroScore),
-    composite:    round(composite),
-  };
+  const grade = scoreGrade(composite);
+  const interpretation =
+    composite >= 80 ? 'Excellent — strong multi-factor bullish alignment' :
+    composite >= 65 ? 'Good — majority of factors bullish' :
+    composite >= 50 ? 'Neutral — mixed signals, monitor closely' :
+    composite >= 35 ? 'Weak — majority of factors bearish' :
+                      'Poor — strong multi-factor bearish alignment';
+
+  return { technical, sentiment: sentScore, fundamental, macro: macroScore, composite, grade, interpretation };
 }
 
-// ─── Price Target Calculator ──────────────────────────────────────────────────
-
+// ─── Price Targets ────────────────────────────────────────────────────────────
 export function computePriceTargets(
-  ti: TechnicalIndicators,
+  ti:           TechnicalIndicators,
+  fundamentals: FundamentalData,
   currentPrice: number,
-  avgCost?: number
+  avgCost?:     number,
 ): PriceTargets {
-  const buyAt    = Math.min(ti.support1, ti.bbLower, currentPrice - ti.atr14);
-  const sellAt   = Math.min(ti.resistance1, ti.bbUpper);
+  // Entry levels
+  // Aggressive: nearest support or Fib 61.8%
+  const aggressiveBuyAt = round(Math.max(
+    Math.min(ti.support1, ti.bbLower, ti.s1),
+    currentPrice * 0.97,      // no more than 3% below current
+  ));
+  // Conservative: confirmed demand zone (2nd support)
+  const conservativeBuyAt = round(Math.max(
+    Math.min(ti.support2, ti.fibRetracement618),
+    currentPrice * 0.93,
+  ));
 
-  const rawStopLoss = currentPrice - 2 * ti.atr14;
-  const costFloor   = avgCost ? avgCost * 0.92 : 0;
-  const stopLoss    = Math.max(rawStopLoss, costFloor);
+  // Upside targets based on resistance levels + Fib extensions
+  const target1 = round(Math.min(ti.resistance1, ti.r1, ti.bbUpper));
+  const target2 = round(Math.min(ti.resistance2, ti.r2));
+  const target3 = round(Math.max(ti.resistance3, currentPrice * 1.20));
 
-  const target1 = ti.resistance1;
-  const target2 = ti.resistance2;
-  const target3 = currentPrice * 1.15;
+  // Stop loss: 2×ATR below current or 8% below avg cost, whichever is higher floor
+  const atrStop     = round(currentPrice - 2 * ti.atr14);
+  const hardStop    = round(avgCost ? avgCost * 0.92 : currentPrice * 0.92);
+  const stopLoss    = round(Math.max(atrStop, hardStop * 0.98));  // slight buffer
+  const hardStopLoss = round(hardStop);
 
-  const riskRewardRatio = stopLoss < buyAt
-    ? round(safeDivide(sellAt - buyAt, buyAt - stopLoss))
-    : 0;
+  const riskRewardRatio    = round(safeDiv(target1 - aggressiveBuyAt, aggressiveBuyAt - stopLoss));
+  const potentialUpsidePct = round(safeDiv(target1 - currentPrice, currentPrice) * 100);
+  const potentialDownsidePct = round(safeDiv(currentPrice - stopLoss, currentPrice) * 100);
+
+  const pct = potentialUpsidePct;
+  const currentVsTargetLabel =
+    currentPrice <= aggressiveBuyAt ? `At buy zone — Target 1 is +${pct.toFixed(1)}% (PKR ${target1})` :
+    currentPrice <= target1          ? `Below T1 — ${pct.toFixed(1)}% upside to PKR ${target1}` :
+    currentPrice <= target2          ? `Between T1/T2 — T2 is PKR ${target2}` :
+                                       `Near/above T2 — consider trimming`;
 
   return {
-    buyAt:            round(buyAt),
-    sellAt:           round(sellAt),
-    stopLoss:         round(stopLoss),
-    target1:          round(target1),
-    target2:          round(target2),
-    target3:          round(target3),
-    riskRewardRatio,
+    aggressiveBuyAt, conservativeBuyAt,
+    target1, target2, target3,
+    stopLoss, hardStopLoss,
+    riskRewardRatio, potentialUpsidePct, potentialDownsidePct,
+    currentVsTargetLabel,
   };
 }
 
-// ─── Position Sizing (Kelly Criterion simplified) ─────────────────────────────
-
+// ─── Position Sizing ──────────────────────────────────────────────────────────
 export function computePositionSizing(
-  priceTargets: PriceTargets,
+  targets:             PriceTargets,
   totalPortfolioValue: number,
-  riskPerTradePct = 0.02
+  riskPct = 0.02,                    // risk 2% of portfolio per trade
 ): PositionSizing {
-  const riskPerShare    = priceTargets.buyAt - priceTargets.stopLoss;
-  const riskAmount      = totalPortfolioValue * riskPerTradePct;
-  const suggestedShares = riskPerShare > 0 ? Math.floor(riskAmount / riskPerShare) : 0;
-  const suggestedValue  = round(suggestedShares * priceTargets.buyAt);
+  const riskPerSharePkr  = round(Math.max(0.01, targets.aggressiveBuyAt - targets.stopLoss));
+  const riskBudget       = totalPortfolioValue * riskPct;
+  const suggestedShares  = riskPerSharePkr > 0 ? Math.floor(riskBudget / riskPerSharePkr) : 0;
+  const suggestedValuePkr = round(suggestedShares * targets.aggressiveBuyAt);
+  const portfolioRiskPct  = round(safeDiv(riskBudget, totalPortfolioValue) * 100);
+  const maxSharesForRiskBudget = suggestedShares;
 
-  return {
-    suggestedShares,
-    suggestedValue,
-    riskPerShare: round(riskPerShare),
-  };
+  return { suggestedShares, suggestedValuePkr, portfolioRiskPct, riskPerSharePkr, maxSharesForRiskBudget };
+}
+
+// ─── Signal label ─────────────────────────────────────────────────────────────
+export function buildSignalLabel(signal: Signal, score: number): string {
+  return signalLabel(signal, score);
 }

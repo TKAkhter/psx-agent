@@ -1,115 +1,104 @@
-# PSX AI Portfolio Analyzer
+# PSX Analyzer v2
 
-An automated, production-grade TypeScript application that ingests national and international news, PSX market data, and macroeconomic indicators to analyse your Pakistan Stock Exchange portfolio — then uses an AI model (Claude / GPT-4o / Gemini) to validate signals and deliver a rich HTML email report and/or a condensed WhatsApp summary.
+Automated AI-powered Pakistan Stock Exchange portfolio analysis system.
+
+Runs on a schedule via Render.com cron, generates a full PDF report, and delivers it via email and/or WhatsApp.
 
 ---
 
-## Architecture
+## What it does
 
-```
-Layer 0  Config & env validation (Joi)
-Layer 1  Parallel data ingestion  (news RSS, PSX market data, macro, fundamentals)
-Layer 2  Preprocessing            (NLP sentiment, Shariah filter, data quality gate, circuit breaker)
-Layer 3  Technical analysis       (RSI, MACD, Bollinger, ATR, OBV, candlestick patterns)
-Layer 4  Scoring & discovery      (composite score, price targets, position sizing, alerts)
-Layer 5  AI review                (Claude / GPT-4o / Gemini validates signals, adds narrative)
-Layer 6  Report building          (HTML email + WhatsApp plain-text)
-Layer 7  Notification dispatch    (SMTP / SendGrid / Twilio — 3x retry with exponential backoff)
-Layer 8  Audit log                (structured JSON via pino)
-```
+1. **Ingests** national & international news (RSS), PSX market data, macro indicators, and per-ticker fundamentals
+2. **Analyses** every portfolio holding and the full KSE-100 discovery universe with 17 signal categories across 30+ technical indicators
+3. **Scores** each stock on a 0–100 composite scale (technical 35% + fundamental 35% + macro 15% + sentiment 15%)
+4. **Generates** precise buy/sell/hold guidance with exact entry prices, three targets, and ATR-based stop losses
+5. **Suggests replacements** — when recommending SELL, the system automatically suggests which portfolio stock (or discovery pick) to buy instead
+6. **Sends AI review** through Claude/GPT-4o/Gemini for validation, narrative, Pakistan-specific risk commentary, and signal override
+7. **Generates a PDF** with the full report (Puppeteer → Chromium)
+8. **Delivers** the PDF via email (with rich text body) and/or WhatsApp (with condensed summary)
 
 ---
 
 ## Quick Start
 
-### 1. Clone & install
-
 ```bash
-git clone <repo>
-cd psx-analyzer
+# 1. Install
 npm install
-```
+npx prisma generate
 
-### 2. Configure
-
-```bash
+# 2. Configure
 cp .env.example .env
-# Edit .env — minimum required fields:
-#   DB_CONNECTION_STRING
-#   ANTHROPIC_API_KEY  (or OPENAI_API_KEY / GEMINI_API_KEY)
-#   EMAIL_FROM / EMAIL_TO  (if NOTIFY_EMAIL=true)
-#   WHATSAPP_TO / TWILIO_*  (if NOTIFY_WHATSAPP=true)
-```
+# Fill in: DATABASE_URL, ANTHROPIC_API_KEY, EMAIL_*, TWILIO_* (if WhatsApp)
 
-### 3. Run immediately
-
-```bash
-npm run dev -- --run-now      # development (ts-node)
-npm run build && npm start -- --run-now   # production
-```
-
-### 4. Run on schedule (weekdays 9 AM PKT by default)
-
-```bash
-npm run build && npm start
+# 3. Run
+npm run dev          # ts-node, single run, exits when done
+npm run build && npm start  # compiled production run
 ```
 
 ---
 
 ## Environment Variables
 
-| Variable | Default | Description |
+| Variable | Default | Purpose |
 |---|---|---|
+| `DATABASE_URL` | required | MongoDB connection string for Prisma |
 | `SHARIAH_MODE` | `compliant` | `compliant` / `non_compliant` / `both` |
-| `INDEX_FILTER` | `KSE-100` | `KSE-100` / `KSE-30` / `ALL_SHARE` / `CUSTOM` |
+| `INDEX_FILTER` | `KSE-100` | Discovery universe filter |
 | `AI_MODEL` | `claude` | `claude` / `gpt4o` / `gemini` |
-| `ANTHROPIC_API_KEY` | — | Required when `AI_MODEL=claude` |
-| `OPENAI_API_KEY` | — | Required when `AI_MODEL=gpt4o` |
-| `GEMINI_API_KEY` | — | Required when `AI_MODEL=gemini` |
-| `DB_CONNECTION_STRING` | — | PostgreSQL URI; falls back to static portfolio if unset |
-| `NOTIFY_EMAIL` | `false` | Send HTML report by email |
-| `NOTIFY_WHATSAPP` | `false` | Send condensed summary via WhatsApp |
-| `NOTIFY_ON_ALERT_ONLY` | `false` | Only notify when alerts fire |
+| `ANTHROPIC_API_KEY` | — | Required for Claude |
+| `OPENAI_API_KEY` | — | Required for GPT-4o |
+| `GEMINI_API_KEY` | — | Required for Gemini |
+| `PSXTERMINAL_API_KEY` | — | PSX Terminal API key (falls back to mock data if absent) |
+| `NOTIFY_EMAIL` | `false` | Send PDF via email |
+| `NOTIFY_WHATSAPP` | `false` | Send summary + PDF note via WhatsApp |
+| `NOTIFY_ON_ALERT_ONLY` | `false` | Only notify when critical/warning alerts fire |
 | `EMAIL_PROVIDER` | `smtp` | `smtp` / `sendgrid` / `ses` |
-| `WHATSAPP_PROVIDER` | `twilio` | `twilio` / `meta` |
-| `RUN_SCHEDULE` | `0 9 * * 1-5` | Cron expression (Asia/Karachi timezone) |
-| `RUN_MODE` | `full` | `full` / `portfolio_only` / `discovery_only` / `alerts_only` |
-| `CIRCUIT_BREAKER_INDEX_DROP_PCT` | `5` | Pause BUY signals if KSE-100 drops more than this % |
-| `WEIGHT_TECHNICAL` | `0.40` | Composite score weight (all four must sum to 1.0) |
-| `WEIGHT_SENTIMENT` | `0.20` | |
-| `WEIGHT_FUNDAMENTAL` | `0.30` | |
-| `WEIGHT_MACRO` | `0.10` | |
+| `EMAIL_FROM` | — | Sender address |
+| `EMAIL_TO` | — | Recipient address |
+| `WEIGHT_TECHNICAL` | `0.35` | Composite score weight |
+| `WEIGHT_FUNDAMENTAL` | `0.35` | Composite score weight |
+| `WEIGHT_MACRO` | `0.15` | Composite score weight |
+| `WEIGHT_SENTIMENT` | `0.15` | Composite score weight |
+| `CIRCUIT_BREAKER_INDEX_DROP_PCT` | `5` | Pause BUY signals if KSE-100 drops > N% |
 
 ---
 
-## Portfolio Database Schema
+## MongoDB Collection Schema
 
-```sql
-CREATE TABLE holdings (
-  id        SERIAL PRIMARY KEY,
-  symbol    VARCHAR(10)  NOT NULL,
-  ticker    VARCHAR(10)  NOT NULL UNIQUE,
-  shares    INTEGER      NOT NULL,
-  avg_cost  NUMERIC(12,2) NOT NULL,
-  name      VARCHAR(100) NOT NULL,
-  sector    VARCHAR(50)  NOT NULL,
-  type      VARCHAR(10)  NOT NULL DEFAULT 'psx'
-);
+The app reads from a `holdings` collection. Each document must have:
+
+```json
+{
+  "symbol":  "MEBL",
+  "ticker":  "MEBL",
+  "shares":  1150,
+  "avgCost": 429.93,
+  "name":    "Meezan Bank",
+  "sector":  "Banking"
+}
 ```
 
-If `DB_CONNECTION_STRING` is not set or the table is empty, the app falls back to the static seed portfolio defined in `src/db/portfolio-repository.ts`.
+If the collection is empty or unreachable, the app falls back to the static seed portfolio defined in `src/db/portfolio-repository.ts`.
 
 ---
 
-## Connecting Live Data Sources
+## Deploying on Render
 
-All data ingestion is in `src/ingestion/`. The market data and fundamentals modules contain clearly marked `TODO` comments where you swap mock stubs for real API calls:
+1. Push this repo to GitHub
+2. In Render dashboard → New → Cron Job → Docker
+3. Set environment variables in the Render dashboard
+4. Set schedule: `0 4 * * 1-5` (4am UTC = 9am PKT, weekdays)
+5. Render builds the Docker image and runs it on schedule — no manual intervention needed
 
-| Module | What to integrate |
-|---|---|
-| `market-data-fetcher.ts` | PSX Data Portal API, TREC feed, Alpha Vantage, Investing.com |
-| `news-fetcher.ts` | RSS feeds are live; add ticker NER model for better entity extraction |
-| `market-data-fetcher.ts` (macro) | SBP open data API, forex.com.pk for PKR rates, PSX weekly bulletin for FPI |
+The `render.yaml` file in this repo configures the service automatically.
+
+---
+
+## Connecting Live PSX Data
+
+All data comes from `src/ingestion/psxterminal-client.ts`. 
+
+Register at [psxterminal.com](https://psxterminal.com) and set `PSXTERMINAL_API_KEY` to replace all mock stubs with live data. Each function has a `TODO` comment showing the exact endpoint to call.
 
 ---
 
@@ -117,62 +106,62 @@ All data ingestion is in `src/ingestion/`. The market data and fundamentals modu
 
 ```
 src/
-├── index.ts                         Entry point — immediate run or cron scheduler
-├── engine.ts                        Main orchestrator — wires all layers together
-├── config/index.ts                  Env var loading, Joi validation, CONFIG object
-├── types/index.ts                   All TypeScript interfaces and types
-├── ingestion/
-│   ├── news-fetcher.ts              National + international RSS, entity extraction
-│   └── market-data-fetcher.ts       OHLCV candles, macro snapshot, fundamentals
-├── preprocessing/
-│   ├── sentiment-analyser.ts        Lexicon NLP, recency-weighted per-ticker scoring
-│   ├── shariah-filter.ts            Filter universe by Shariah compliance flag
-│   └── data-quality.ts             Gap detection, liquidity check, penny-stock gate
-├── analysis/
-│   ├── technical-indicators.ts      RSI, MACD, BB, ATR, OBV, stochastic, patterns
-│   └── signal-engine.ts            Weighted signal aggregation → conviction score
-├── scoring/
-│   ├── composite-scorer.ts          Composite score, price targets, position sizing
-│   └── alert-evaluator.ts          Per-holding alerts, sector concentration, circuit breaker
-├── ai-review/
-│   ├── prompt-builder.ts            System prompt + runtime user prompt builder
-│   └── ai-client.ts                Claude / GPT-4o / Gemini callers + response parser
-├── reporting/
-│   └── report-builder.ts           HTML email report + WhatsApp plain-text builder
-├── notifications/
-│   ├── email-sender.ts             Nodemailer (SMTP / SendGrid / SES)
-│   ├── whatsapp-sender.ts          Twilio WhatsApp API
-│   └── notification-dispatcher.ts  Orchestrates both channels with 3x retry
-├── scheduler/
-│   └── cron-scheduler.ts           Cron job with overlap guard
+├── index.ts                          Entry point — runs once, exits
+├── engine.ts                         Main orchestrator
+├── config/index.ts                   Env validation + CONFIG constant
+├── types/index.ts                    All TypeScript interfaces
 ├── db/
-│   └── portfolio-repository.ts     PostgreSQL query + static fallback
+│   ├── prisma-client.ts              Prisma singleton (MongoDB)
+│   └── portfolio-repository.ts       Read holdings + save run logs
+├── ingestion/
+│   ├── psxterminal-client.ts         Market data, fundamentals, macro
+│   └── news-fetcher.ts               RSS news + entity sentiment scoring
+├── preprocessing/
+│   ├── shariah-filter.ts             Filter by Shariah compliance flag
+│   └── data-quality.ts              Gap detection, liquidity gate
+├── analysis/
+│   ├── technical-indicators.ts       30+ indicators (RSI, MACD, ADX, CMF, etc.)
+│   └── signal-engine.ts             17 signal categories → conviction score
+├── scoring/
+│   ├── composite-scorer.ts           Composite score, price targets, position sizing
+│   └── alert-evaluator.ts           10 alert types + replacement suggestions
+├── ai-review/
+│   ├── prompt-builder.ts             System + user prompt construction
+│   └── ai-client.ts                 Claude / GPT-4o / Gemini callers
+├── reporting/
+│   └── pdf-builder.ts               HTML → PDF via Puppeteer
+├── notifications/
+│   ├── email-sender.ts              SMTP/SendGrid/SES with PDF attachment
+│   ├── whatsapp-sender.ts           Twilio WhatsApp
+│   └── dispatcher.ts               Orchestrates both channels with 3× retry
 └── utils/
     ├── logger.ts                    Pino structured logger
     ├── http-client.ts               Axios with retry
-    └── helpers.ts                   Normalise, round, formatPkr, recencyDecay, etc.
+    └── helpers.ts                   Formatters, maths, score grade
+prisma/
+└── schema.prisma                    MongoDB schema (Holding + RunLog)
 ```
 
 ---
 
-## Docker
+## Technical Indicators Reference
 
-```bash
-docker build -t psx-analyzer .
-docker run --env-file .env psx-analyzer --run-now
-```
+The system computes and signals on all of the following:
 
----
-
-## Extending
-
-- **Add a new indicator**: compute it in `technical-indicators.ts`, add its name to `TechnicalIndicators` type, add the signal rule in `signal-engine.ts`
-- **Add a new news source**: add the RSS URL to `PSX_NEWS_SOURCES` in `config/index.ts`
-- **Add a new notification channel**: create `src/notifications/telegram-sender.ts`, add a flag in `.env.example` and `config/index.ts`, call it from `notification-dispatcher.ts`
-- **Add backtesting**: the full `RunOutput` JSON is logged on every run — replay archived outputs through the scoring layer to measure historical accuracy
+| Category | Indicators |
+|---|---|
+| Moving Averages | SMA 10/20/50/100/200, EMA 9/12/21/26/50, VWAP |
+| Momentum | RSI-14/9 + divergence, MACD (line/signal/cross), Stochastic K/D, Williams %R, CCI-20, MFI-14, ROC-10 |
+| Volatility | ATR-14, Bollinger Bands (width, squeeze, position), Historical Volatility 30d |
+| Volume | OBV + trend, Accumulation/Distribution, Chaikin Money Flow, Volume ratio |
+| Trend Strength | ADX-14, +DI/-DI, Ichimoku cloud signal |
+| Support/Resistance | 3-level S/R, Pivot points (classic), Fibonacci 38.2/50/61.8% |
+| Candlesticks | Doji, Hammer, Shooting Star, Bullish/Bearish Engulfing, Morning/Evening Star, Inverted Hammer |
 
 ---
 
 ## Disclaimer
 
-This software is for informational purposes only. It does not constitute financial advice. Always conduct your own due diligence before making investment decisions. Past performance does not guarantee future results. Investing in equities involves risk of capital loss.
+This software is for informational purposes only. It does not constitute financial advice.
+Always conduct your own due diligence before making investment decisions.
+Past performance does not guarantee future results. Investing in equities involves risk of capital loss.

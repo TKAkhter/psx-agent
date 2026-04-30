@@ -1,0 +1,38 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+model Holding {
+  id      String @id @default(auto()) @map("_id") @db.ObjectId
+  symbol  String
+  ticker  String @unique
+  shares  Int
+  avgCost Float  @map("avgCost")
+  name    String
+  sector  String
+
+  @@map("holdings")
+}
+
+model RunLog {
+  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
+  runId               String   @unique
+  runAt               DateTime
+  durationMs          Int
+  tickersAnalysed     Int
+  portfolioValue      Float
+  unrealisedPl        Float
+  alertCount          Int
+  aiAccuracyRating    Float
+  circuitBreakerActive Boolean
+  signals             Json
+  errors              String[]
+  createdAt           DateTime @default(now())
+
+  @@map("run_logs")
+}

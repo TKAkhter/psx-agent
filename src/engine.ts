@@ -3,128 +3,108 @@ import { v4 as uuidv4 } from 'uuid';
 
 import { CONFIG } from './config';
 import { logger } from './utils/logger';
+import { round, signalLabel } from './utils/helpers';
 
-// ── Ingestion ─────────────────────────────────────────────────────────────────
-import { fetchNationalNews, fetchInternationalNews } from './ingestion/news-fetcher';
-import { fetchTickerData, fetchMacroSnapshot, fetchFundamentals } from './ingestion/market-data-fetcher';
+// Ingestion
+import { fetchTickerData, fetchFundamentals, fetchMacroSnapshot } from './ingestion/psxterminal-client';
+import { fetchAllNews, buildSentiment } from './ingestion/news-fetcher';
 
-// ── Preprocessing ─────────────────────────────────────────────────────────────
-import { analyseSentiment } from './preprocessing/sentiment-analyser';
-import { passesShariahFilter, isShariahCompliant } from './preprocessing/shariah-filter';
-import { assessDataQuality, forwardFillCandles } from './preprocessing/data-quality';
+// Preprocessing
+import { passesFilter, isShariahCompliant } from './preprocessing/shariah-filter';
+import { assessQuality, forwardFill } from './preprocessing/data-quality';
 
-// ── Analysis ──────────────────────────────────────────────────────────────────
+// Analysis
 import { computeTechnicalIndicators } from './analysis/technical-indicators';
 import { generateSignals } from './analysis/signal-engine';
 
-// ── Scoring ───────────────────────────────────────────────────────────────────
-import { computeCompositeScore, computePriceTargets, computePositionSizing } from './scoring/composite-scorer';
-import { evaluateAlerts, computeSectorConcentration, isCircuitBreakerActive } from './scoring/alert-evaluator';
+// Scoring
+import { computeCompositeScore, computePriceTargets, computePositionSizing, buildSignalLabel } from './scoring/composite-scorer';
+import { evaluateAlerts, computeSectorConcentration, isCircuitBreakerActive, suggestReplacement } from './scoring/alert-evaluator';
 
-// ── AI Review ─────────────────────────────────────────────────────────────────
+// AI
 import { runAiReview } from './ai-review/ai-client';
 
-// ── Notifications ─────────────────────────────────────────────────────────────
-import { dispatchNotifications } from './notifications/notification-dispatcher';
+// Notifications
+import { dispatchNotifications } from './notifications/dispatcher';
 
-// ── DB ────────────────────────────────────────────────────────────────────────
-import { PortfolioRepository } from './db/portfolio-repository';
+// DB
+import { getHoldings, saveRunLog } from './db/portfolio-repository';
+import { disconnectDb } from './db/prisma-client';
 
 import type {
-  Holding, NewsArticle, MacroSnapshot,
-  StockRecommendation, EnrichedHolding,
-  RunOutput, ConfigSnapshot,
+  Holding, StockRecommendation, PortfolioPosition,
+  RunOutput, NewsArticle, MacroSnapshot,
 } from './types';
 
-// ─── KSE-100 Discovery Universe ───────────────────────────────────────────────
+// ─── Analyse one ticker ───────────────────────────────────────────────────────
 
-const KSE100_UNIVERSE: string[] = [
-  'MEBL', 'OGDC', 'HUBC', 'EFERT', 'ENGROH', 'FFC', 'LUCK', 'MARI', 'POL', 'SYS',
-  'HBL',  'MCB',  'UBL',  'NBP',   'BAHL',  'PSO', 'PPL', 'ENGRO', 'DGKC', 'CHCC',
-  'KAPCO','KEL',  'HCAR', 'PSMC',  'AGTL',  'MLCF','KOHC', 'PIOC', 'ACPL', 'FCCL',
-];
-
-// ─── Analyse One Ticker ───────────────────────────────────────────────────────
-
-async function analyseOneTicker(
+async function analyseTicker(
   ticker:              string,
   holding:             Holding | undefined,
   allNews:             NewsArticle[],
   macro:               MacroSnapshot,
   totalPortfolioValue: number,
-  circuitBreakerOn:    boolean,
+  circuitBreaker:      boolean,
 ): Promise<StockRecommendation | null> {
   try {
-    // Layer 1c: Market data
+    // Market data
     let marketData = await fetchTickerData(ticker);
+    const quality  = assessQuality(marketData);
 
-    // Layer 2d: Data quality gate
-    const quality = assessDataQuality(marketData);
     if (!quality.valid) {
-      logger.warn({ ticker, flags: quality.flags }, 'Skipping — data quality gate');
+      logger.warn({ ticker, flags: quality.flags }, 'Skipping — quality gate');
       return null;
     }
-    if (quality.warnings.length > 0) {
-      marketData = forwardFillCandles(marketData);
-    }
+    if (quality.warnings.length > 0) marketData = forwardFill(marketData);
 
-    // Layer 3a–f: Technical analysis
+    // Technical analysis
     const technicals   = computeTechnicalIndicators(marketData.candles);
+    const signalResult = generateSignals(technicals, circuitBreaker);
 
-    // Layer 3g: Signal generation
-    const signalResult = generateSignals(technicals, circuitBreakerOn);
-
-    // Layer 1e: Fundamentals
+    // Fundamentals & sentiment
     const fundamentals = await fetchFundamentals(ticker);
+    const sentiment    = buildSentiment(ticker, allNews);
 
-    // Layer 2a: Sentiment
-    const sentiment = analyseSentiment(ticker, allNews);
-
-    // Layer 4a: Composite scoring
+    // Composite scoring
     const compositeScore = computeCompositeScore(signalResult, sentiment, fundamentals, macro);
-
-    // Layer 4b–c: Price targets
-    const priceTargets = computePriceTargets(technicals, marketData.currentPrice, holding?.avgCost);
-
-    // Layer 4d: Position sizing
+    const priceTargets   = computePriceTargets(technicals, fundamentals, marketData.currentPrice, holding?.avgCost);
     const positionSizing = computePositionSizing(priceTargets, totalPortfolioValue);
 
-    // Layer 3h: Portfolio enrichment
-    let enrichedHolding:    EnrichedHolding | undefined;
-    let unrealisedPlPkr:    number | undefined;
-    let unrealisedPlPct:    number | undefined;
-    let portfolioWeightPct: number | undefined;
-
+    // Portfolio position enrichment
+    let position: PortfolioPosition | undefined;
     if (holding) {
-      unrealisedPlPkr    = (marketData.currentPrice - holding.avgCost) * holding.shares;
-      unrealisedPlPct    = ((marketData.currentPrice - holding.avgCost) / holding.avgCost) * 100;
-      const posValue     = marketData.currentPrice * holding.shares;
-      portfolioWeightPct = totalPortfolioValue > 0 ? (posValue / totalPortfolioValue) * 100 : 0;
+      const marketValue    = marketData.currentPrice * holding.shares;
+      const costBasis      = holding.avgCost * holding.shares;
+      const unrealisedPlPkr = marketValue - costBasis;
+      const unrealisedPlPct = ((marketData.currentPrice - holding.avgCost) / holding.avgCost) * 100;
+      const portfolioWeightPct = totalPortfolioValue > 0 ? (marketValue / totalPortfolioValue) * 100 : 0;
 
-      enrichedHolding = {
+      position = {
         ...holding,
         currentPrice:       marketData.currentPrice,
-        unrealisedPlPkr,
-        unrealisedPlPct,
-        positionValue:      posValue,
-        portfolioWeightPct,
+        marketValue:        round(marketValue),
+        costBasis:          round(costBasis),
+        unrealisedPlPkr:    round(unrealisedPlPkr),
+        unrealisedPlPct:    round(unrealisedPlPct),
+        portfolioWeightPct: round(portfolioWeightPct),
         shariah:            isShariahCompliant(ticker),
       };
     }
 
-    const flags: string[] = [...quality.flags];
-    if (quality.warnings.length > 0) flags.push(...quality.warnings);
-    if (circuitBreakerOn && (signalResult.overallSignal === 'BUY' || signalResult.overallSignal === 'STRONG_BUY')) {
-      flags.push('CIRCUIT_BREAKER_ACTIVE');
+    const flags: string[] = [...quality.flags, ...quality.warnings];
+    if (circuitBreaker && (signalResult.overallSignal === 'BUY' || signalResult.overallSignal === 'STRONG_BUY')) {
+      flags.push('CIRCUIT_BREAKER_PAUSED');
     }
 
     return {
       ticker,
-      name:               holding?.name   ?? ticker,
-      sector:             holding?.sector ?? 'Unknown',
-      shariah:            isShariahCompliant(ticker),
-      currentPrice:       marketData.currentPrice,
-      signal:             signalResult.overallSignal,
+      name:         holding?.name ?? marketData.name,
+      sector:       holding?.sector ?? marketData.sector,
+      shariah:      isShariahCompliant(ticker),
+      currentPrice: marketData.currentPrice,
+      dayChangePct: marketData.dayChangePct,
+      signal:       signalResult.overallSignal,
+      signalLabel:  buildSignalLabel(signalResult.overallSignal, compositeScore.composite),
       compositeScore,
       priceTargets,
       positionSizing,
@@ -133,204 +113,161 @@ async function analyseOneTicker(
       fundamentals,
       sentiment,
       flags,
-      holding:            enrichedHolding,
-      unrealisedPlPkr,
-      unrealisedPlPct,
-      portfolioWeightPct,
+      position,
     };
   } catch (err) {
-    logger.error({ ticker, err }, 'analyseOneTicker failed');
+    logger.error({ ticker, err }, 'analyseTicker failed');
     return null;
   }
 }
 
-// ─── Main Engine ──────────────────────────────────────────────────────────────
+// ─── Main engine ──────────────────────────────────────────────────────────────
 
 export async function runAnalysisEngine(): Promise<RunOutput> {
-  const runId  = uuidv4();
-  const runAt  = new Date();
-  const t0     = Date.now();
+  const runId = uuidv4();
+  const runAt = new Date();
+  const t0    = Date.now();
+  logger.info({ runId }, '=== PSX Analysis Engine v2 Starting ===');
 
-  logger.info({ runId, runMode: CONFIG.RUN_MODE }, '=== PSX Analysis Engine Starting ===');
-
-  // ── Layer 0: Config snapshot ─────────────────────────────────────────────
-  const config: ConfigSnapshot = {
+  // Config snapshot
+  const config = {
     shariahMode: CONFIG.SHARIAH_MODE,
     indexFilter: CONFIG.INDEX_FILTER,
-    runMode:     CONFIG.RUN_MODE,
     aiModel:     CONFIG.AI_MODEL,
-    weights:     CONFIG.WEIGHTS,
+    weights:     CONFIG.WEIGHTS as unknown as Record<string, number>,
   };
 
-  // ── Layer 1: Parallel ingestion ──────────────────────────────────────────
+  // Layer 1: parallel ingestion ─────────────────────────────────────────────
   logger.info('Layer 1 — ingesting data');
-  const [nationalNews, intlNews, macro] = await Promise.all([
-    fetchNationalNews(),
-    fetchInternationalNews(),
+  const [allNews, macro, holdings] = await Promise.all([
+    fetchAllNews(),
     fetchMacroSnapshot(),
+    getHoldings(),
   ]);
-  const allNews = [...nationalNews, ...intlNews];
-  logger.info(
-    { national: nationalNews.length, intl: intlNews.length },
-    'News ingested',
-  );
 
-  // ── Layer 2e: Circuit breaker ────────────────────────────────────────────
+  const filteredHoldings = holdings.filter(h => passesFilter(h.ticker, CONFIG.SHARIAH_MODE));
+  logger.info({ total: holdings.length, filtered: filteredHoldings.length }, 'Holdings loaded');
+
+  // Layer 2: circuit breaker ────────────────────────────────────────────────
   const circuitBreakerActive = isCircuitBreakerActive(macro.kse100ChangePct);
   if (circuitBreakerActive) {
-    logger.warn(
-      { kse100ChangePct: macro.kse100ChangePct },
-      'CIRCUIT BREAKER ACTIVE — BUY signals paused',
-    );
+    logger.warn({ change: macro.kse100ChangePct }, 'CIRCUIT BREAKER ACTIVE');
   }
 
-  // ── Load portfolio from DB ───────────────────────────────────────────────
-  const repo     = new PortfolioRepository();
-  const holdings = await repo.getHoldings();
-  await repo.close();
+  // Rough portfolio value for initial sizing
+  const roughValue = filteredHoldings.reduce((s, h) => s + h.avgCost * h.shares, 0);
 
-  const filteredHoldings = holdings.filter(
-    (h) => passesShariahFilter(h.ticker, CONFIG.SHARIAH_MODE),
+  // Layer 3–4: analyse portfolio ─────────────────────────────────────────────
+  logger.info('Layers 3–4 — analysing portfolio');
+  const limit = pLimit(5);
+
+  const portResults = await Promise.all(
+    filteredHoldings.map(h =>
+      limit(() => analyseTicker(h.ticker, h, allNews, macro, roughValue, circuitBreakerActive))
+    )
   );
-  logger.info(
-    { total: holdings.length, afterFilter: filteredHoldings.length },
-    'Portfolio loaded',
+  const portfolioRecs = portResults.filter((r): r is StockRecommendation => r !== null);
+
+  // Recompute with live prices
+  const totalPortfolioValue = portfolioRecs.reduce(
+    (s, r) => s + (r.position ? r.currentPrice * r.position.shares : 0), 0
   );
-
-  // Rough portfolio value using avgCost for initial sizing calcs
-  const roughPortfolioValue = filteredHoldings.reduce(
-    (sum, h) => sum + h.avgCost * h.shares,
-    0,
+  const totalCostBasis = portfolioRecs.reduce(
+    (s, r) => s + (r.position ? r.position.costBasis : 0), 0
   );
+  const totalUnrealisedPl    = portfolioRecs.reduce((s, r) => s + (r.position?.unrealisedPlPkr ?? 0), 0);
+  const totalUnrealisedPlPct = totalCostBasis > 0 ? (totalUnrealisedPl / totalCostBasis) * 100 : 0;
 
-  // ── Layers 3–4: Analyse portfolio holdings ───────────────────────────────
-  logger.info('Layers 3–4 — analysing portfolio holdings');
-  const limit  = pLimit(5); // max 5 concurrent ticker analyses
-
-  const portfolioResults = await Promise.all(
-    filteredHoldings.map((h) =>
-      limit(() =>
-        analyseOneTicker(
-          h.ticker, h, allNews, macro, roughPortfolioValue, circuitBreakerActive,
-        ),
-      ),
-    ),
+  // Discovery engine ─────────────────────────────────────────────────────────
+  logger.info('Discovery — scanning KSE-100 universe');
+  const portfolioTickers = new Set(filteredHoldings.map(h => h.ticker));
+  const discoveryUniverse = CONFIG.KSE100_UNIVERSE.filter(
+    t => !portfolioTickers.has(t) && passesFilter(t, CONFIG.SHARIAH_MODE)
   );
 
-  const portfolioRecommendations = portfolioResults.filter(
-    (r): r is StockRecommendation => r !== null,
+  const discResults = await Promise.all(
+    discoveryUniverse.map(t =>
+      limit(() => analyseTicker(t, undefined, allNews, macro, totalPortfolioValue, circuitBreakerActive))
+    )
   );
 
-  // Recompute totals with live prices
-  const totalPortfolioValue = portfolioRecommendations.reduce(
-    (sum, r) => sum + (r.holding ? r.currentPrice * r.holding.shares : 0),
-    0,
-  );
-  const totalUnrealisedPl = portfolioRecommendations.reduce(
-    (sum, r) => sum + (r.unrealisedPlPkr ?? 0),
-    0,
-  );
+  const sectorCheck = computeSectorConcentration(portfolioRecs, totalPortfolioValue);
 
-  // ── Discovery engine ─────────────────────────────────────────────────────
-  let discoveryPicks: StockRecommendation[] = [];
+  const discoveryPicks = discResults
+    .filter((r): r is StockRecommendation => r !== null)
+    .filter(r => r.compositeScore.composite > 65)
+    .filter(r => r.signal === 'BUY' || r.signal === 'STRONG_BUY')
+    .filter(r => r.priceTargets.riskRewardRatio >= 1.5)
+    .filter(r => !r.flags.includes('ILLIQUID'))
+    .filter(r => (sectorCheck[r.sector] ?? 0) < 35)
+    .sort((a, b) => b.compositeScore.composite - a.compositeScore.composite)
+    .slice(0, 10);
 
-  if (CONFIG.RUN_MODE === 'full' || CONFIG.RUN_MODE === 'discovery_only') {
-    logger.info('Discovery — scanning KSE-100 universe');
+  logger.info({ count: discoveryPicks.length }, 'Discovery picks identified');
 
-    const portfolioTickers = new Set(filteredHoldings.map((h) => h.ticker));
+  // Alerts & sector ──────────────────────────────────────────────────────────
+  const alerts = evaluateAlerts(portfolioRecs);
+  const sectorConcentration = computeSectorConcentration(portfolioRecs, totalPortfolioValue);
 
-    const universe = KSE100_UNIVERSE.filter(
-      (t) =>
-        !portfolioTickers.has(t) &&
-        passesShariahFilter(t, CONFIG.SHARIAH_MODE),
-    );
-
-    const discoveryResults = await Promise.all(
-      universe.map((ticker) =>
-        limit(() =>
-          analyseOneTicker(
-            ticker, undefined, allNews, macro, totalPortfolioValue, circuitBreakerActive,
-          ),
-        ),
-      ),
-    );
-
-    const sectorCheck = computeSectorConcentration(
-      portfolioRecommendations,
-      totalPortfolioValue,
-    );
-
-    discoveryPicks = discoveryResults
-      .filter((r): r is StockRecommendation => r !== null)
-      .filter((r) => r.compositeScore.composite > 65)
-      .filter((r) => r.signal === 'BUY' || r.signal === 'STRONG_BUY')
-      .filter((r) => r.priceTargets.riskRewardRatio >= 1.5)
-      .filter((r) => !r.flags.includes('ILLIQUID'))
-      .filter((r) => (sectorCheck[r.sector] ?? 0) < 35)
-      .sort((a, b) => b.compositeScore.composite - a.compositeScore.composite)
-      .slice(0, 10);
-
-    logger.info({ count: discoveryPicks.length }, 'Discovery picks found');
+  // Attach suggested replacements for SELL signals
+  for (const rec of portfolioRecs) {
+    if ((rec.signal === 'SELL' || rec.signal === 'STRONG_SELL') && !rec.suggestedReplacement) {
+      rec.suggestedReplacement = suggestReplacement(rec.ticker, portfolioRecs, discoveryPicks);
+    }
   }
 
-  // ── Layer 4b: Alerts ─────────────────────────────────────────────────────
-  const alerts = evaluateAlerts(portfolioRecommendations);
-  const sectorConcentration = computeSectorConcentration(
-    portfolioRecommendations,
-    totalPortfolioValue,
-  );
   logger.info({ alertCount: alerts.length }, 'Alerts evaluated');
 
-  // ── Build partial output for AI prompt ──────────────────────────────────
+  // Build partial output for AI ──────────────────────────────────────────────
   const partialOutput: RunOutput = {
-    runId,
-    runAt,
-    config,
-    macroSnapshot:            macro,
-    portfolioRecommendations,
-    discoveryPicks,
-    alerts,
-    sectorConcentration,
-    aiReview:                 {} as RunOutput['aiReview'], // filled below
+    runId, runAt, config, macro,
+    portfolioRecs, discoveryPicks, alerts, sectorConcentration,
+    aiReview: {} as RunOutput['aiReview'],
     circuitBreakerActive,
-    totalPortfolioValue,
-    totalUnrealisedPl,
+    totalPortfolioValue: round(totalPortfolioValue),
+    totalCostBasis:      round(totalCostBasis),
+    totalUnrealisedPl:   round(totalUnrealisedPl),
+    totalUnrealisedPlPct: round(totalUnrealisedPlPct),
   };
 
-  // ── Layer 5: AI review ───────────────────────────────────────────────────
-  logger.info('Layer 5 — running AI review');
-  const aiReview = await runAiReview(partialOutput);
-  const fullOutput: RunOutput = { ...partialOutput, aiReview };
+  // Layer 5: AI review ───────────────────────────────────────────────────────
+  logger.info('Layer 5 — AI review');
+  const aiReview   = await runAiReview(partialOutput);
+  const fullOutput = { ...partialOutput, aiReview };
 
-  // ── Layer 7: Notifications ───────────────────────────────────────────────
+  // Layer 7: notifications ───────────────────────────────────────────────────
   logger.info('Layer 7 — dispatching notifications');
   const deliveryLogs = await dispatchNotifications(fullOutput);
 
-  // ── Layer 8: Audit log ───────────────────────────────────────────────────
-  const signalCounts = [...portfolioRecommendations, ...discoveryPicks].reduce<
-    Record<string, number>
-  >((acc, r) => {
-    acc[r.signal] = (acc[r.signal] ?? 0) + 1;
-    return acc;
-  }, {});
-
-  logger.info(
-    {
-      runId,
-      durationMs:          Date.now() - t0,
-      tickersAnalysed:     portfolioRecommendations.length + discoveryPicks.length,
-      signals:             signalCounts,
-      alerts:              alerts.length,
-      circuitBreakerActive,
-      aiAccuracyRating:    aiReview.algorithmAccuracyRating.score,
-      totalPortfolioValue: Math.round(totalPortfolioValue),
-      totalUnrealisedPl:   Math.round(totalUnrealisedPl),
-      notifications:       deliveryLogs.map((l) => ({
-        channel: l.channel, status: l.status,
-      })),
-    },
-    '=== PSX Analysis Engine Complete ===',
+  // Layer 8: audit log ───────────────────────────────────────────────────────
+  const durationMs = Date.now() - t0;
+  const signalCounts = [...portfolioRecs, ...discoveryPicks].reduce<Record<string, number>>(
+    (acc, r) => { acc[r.signal] = (acc[r.signal] ?? 0) + 1; return acc; }, {}
   );
+
+  await saveRunLog({
+    runId, runAt, durationMs,
+    tickersAnalysed: portfolioRecs.length + discoveryPicks.length,
+    portfolioValue:  totalPortfolioValue,
+    unrealisedPl:    totalUnrealisedPl,
+    alertCount:      alerts.length,
+    aiAccuracyRating: aiReview.algorithmScore,
+    circuitBreakerActive,
+    signals:         signalCounts,
+    errors:          deliveryLogs.filter(l => l.status === 'failed').map(l => l.error ?? 'unknown'),
+  });
+
+  logger.info({
+    runId, durationMs,
+    portfolioValue:  Math.round(totalPortfolioValue),
+    unrealisedPl:    Math.round(totalUnrealisedPl),
+    unrealisedPlPct: round(totalUnrealisedPlPct),
+    alerts:          alerts.length,
+    aiScore:         aiReview.algorithmScore,
+    stance:          aiReview.marketStance,
+    signals:         signalCounts,
+    notifications:   deliveryLogs.map(l => ({ channel: l.channel, status: l.status })),
+  }, '=== PSX Analysis Engine Complete ===');
 
   return fullOutput;
 }

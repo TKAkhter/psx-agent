@@ -1,58 +1,62 @@
-import './config'; // validates env vars at startup — throws if invalid
+/**
+ * PSX Analyzer v2 — Entry Point
+ *
+ * Designed for Render.com cron deployment:
+ * - No CLI arguments required
+ * - Runs the full analysis once, exits cleanly
+ * - Render triggers execution on its own schedule
+ *
+ * Local dev:  npm run dev
+ * Production: npm start   (after npm run build)
+ */
+import './config';                         // validates env vars — throws on bad config
 import { logger } from './utils/logger';
 import { runAnalysisEngine } from './engine';
-import { startScheduler } from './scheduler/cron-scheduler';
+import { disconnectDb } from './db/prisma-client';
 
-// ─── Graceful Shutdown ────────────────────────────────────────────────────────
+// ─── Graceful shutdown ─────────────────────────────────────────────────────────
 
-function handleShutdown(signal: string): void {
-  logger.info({ signal }, 'Received shutdown signal — exiting gracefully');
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received — disconnecting DB');
+  await disconnectDb();
   process.exit(0);
-}
+});
 
-process.on('SIGTERM', () => handleShutdown('SIGTERM'));
-process.on('SIGINT',  () => handleShutdown('SIGINT'));
-
-process.on('uncaughtException', (err: Error) => {
-  logger.error({ err }, 'Uncaught exception — shutting down');
+process.on('uncaughtException', async (err: Error) => {
+  logger.error({ err }, 'Uncaught exception — exiting');
+  await disconnectDb();
   process.exit(1);
 });
 
-process.on('unhandledRejection', (reason: unknown) => {
-  logger.error({ reason }, 'Unhandled promise rejection — shutting down');
+process.on('unhandledRejection', async (reason: unknown) => {
+  logger.error({ reason }, 'Unhandled rejection — exiting');
+  await disconnectDb();
   process.exit(1);
 });
 
-// ─── Entry Point ──────────────────────────────────────────────────────────────
+// ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  const args    = process.argv.slice(2);
-  const runNow  = args.includes('--run-now') || args.includes('-r');
+  logger.info({ pid: process.pid, node: process.version }, 'PSX Analyzer v2 starting');
 
-  logger.info(
-    { mode: runNow ? 'immediate' : 'scheduled', pid: process.pid },
-    'PSX Analyzer starting'
-  );
+  try {
+    const output = await runAnalysisEngine();
 
-  if (runNow) {
-    try {
-      const output = await runAnalysisEngine();
-      logger.info({
-        runId:          output.runId,
-        portfolioValue: Math.round(output.totalPortfolioValue),
-        unrealisedPl:   Math.round(output.totalUnrealisedPl),
-        alertCount:     output.alerts.length,
-        stance:         output.aiReview.overallMarketView?.stance ?? 'unknown',
-      }, 'Immediate run complete');
-      process.exit(0);
-    } catch (err) {
-      logger.error({ err }, 'Immediate run failed');
-      process.exit(1);
-    }
-  } else {
-    startScheduler();
-    // Keep the process alive — the cron job handles execution
-    logger.info('Process running — waiting for scheduled trigger. Ctrl+C to stop.');
+    logger.info({
+      runId:          output.runId,
+      portfolioValue: Math.round(output.totalPortfolioValue),
+      unrealisedPl:   Math.round(output.totalUnrealisedPl),
+      alerts:         output.alerts.length,
+      stance:         output.aiReview.marketStance,
+      aiScore:        output.aiReview.algorithmScore,
+    }, 'Run successful');
+
+    await disconnectDb();
+    process.exit(0);
+  } catch (err) {
+    logger.error({ err }, 'Fatal error during analysis run');
+    await disconnectDb();
+    process.exit(1);
   }
 }
 

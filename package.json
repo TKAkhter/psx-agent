@@ -1,50 +1,41 @@
 {
-  "name": "psx-agent",
-  "version": "4.0.0",
+  "name": "psx-analyzer",
+  "version": "2.0.0",
   "description": "AI-powered PSX portfolio analysis system",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
-    "start": "node dist/index.js --run-now",
-    "dev": "ts-node src/index.ts --run-now",
-    "dev:watch": "ts-node-dev --respawn src/index.ts",
-    "lint": "eslint src --ext .ts",
-    "test": "jest"
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "prisma:generate": "prisma generate",
+    "prisma:push": "prisma db push"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.20.0",
+    "@prisma/client": "^5.10.0",
     "axios": "^1.6.0",
     "axios-retry": "^4.0.0",
-    "bottleneck": "^2.19.5",
-    "cheerio": "^1.0.0-rc.12",
-    "cron": "^3.1.6",
     "date-fns": "^3.3.1",
     "dotenv": "^16.4.1",
-    "handlebars": "^4.7.8",
     "joi": "^17.12.1",
-    "lodash": "^4.17.21",
-    "natural": "^6.10.4",
     "nodemailer": "^6.9.9",
     "openai": "^4.28.0",
     "p-limit": "^3.1.0",
     "p-retry": "^4.6.2",
-    "pg": "^8.11.3",
     "pino": "^8.18.0",
     "pino-pretty": "^10.3.1",
+    "puppeteer": "^22.4.0",
     "rss-parser": "^3.13.0",
     "technicalindicators": "^3.1.0",
     "twilio": "^5.0.3",
-    "uuid": "^9.0.0",
-    "zod": "^3.22.4"
+    "uuid": "^9.0.0"
   },
   "devDependencies": {
-    "@types/lodash": "^4.14.202",
     "@types/node": "^20.11.5",
     "@types/nodemailer": "^6.4.14",
-    "@types/pg": "^8.11.0",
     "@types/uuid": "^9.0.7",
+    "prisma": "^5.10.0",
     "ts-node": "^10.9.2",
-    "ts-node-dev": "^2.0.0",
     "typescript": "^5.3.3"
   }
 }

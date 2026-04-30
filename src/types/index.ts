@@ -169,6 +169,25 @@ export interface TechnicalIndicators {
   s1: number; s2: number; s3: number;
   fibRetracement382: number; fibRetracement500: number; fibRetracement618: number;
   candlestickPattern: string; candlestickBullish: boolean;
+  // New: PSX-context indicators
+  priceVsVwapPct:         number;   // % above/below VWAP
+  priceVs52wHighPct:      number;   // % below 52w high (drawdown)
+  priceVs52wLowPct:       number;   // % above 52w low (recovery)
+  goldenCrossActive:      boolean;  // SMA50 > SMA200 currently
+  deathCrossActive:       boolean;  // SMA50 < SMA200 currently
+  trendConsistency:       number;   // 0–100: how aligned short/mid/long trends are
+  // On-Balance Volume divergence
+  obvDivergence:          'bullish' | 'bearish' | 'none';
+  // Parabolic SAR
+  parabolicSarSignal:     'bullish' | 'bearish';
+  parabolicSarValue:      number;
+  // Keltner Channel
+  keltnerUpper:           number;
+  keltnerMid:             number;
+  keltnerLower:           number;
+  keltnerPosition:        'above' | 'inside' | 'below';
+  // Relative strength vs KSE-100
+  relativeStrengthVsIndex: number;  // stock return / index return (>1 = outperforming)
 }
 
 export interface TechnicalSignal {
@@ -315,4 +334,41 @@ export interface DeliveryLog {
   messageId?: string;
   error?:    string;
   attempts:  number;
+}
+
+// ─── PSX Terminal extended fundamental data ───────────────────────────────────
+// Used when PSX Terminal API provides richer fields
+export interface PSXCompanyInfo {
+  ticker:            string;
+  name:              string;
+  sector:            string;
+  subSector:         string;
+  listingDate:       string;
+  listedCapital:     number;
+  faceValue:         number;
+  sharesOutstanding: number;
+  isinCode:          string;
+  lotSize:           number;
+}
+
+// ─── Market Breadth (for KSE-100 context) ─────────────────────────────────────
+export interface MarketBreadth {
+  advancers:         number;
+  decliners:         number;
+  unchanged:         number;
+  totalVolume:       number;
+  totalValue:        number;
+  advanceDeclineRatio: number;   // > 1 = more advancers = bullish breadth
+  newHighs:          number;
+  newLows:           number;
+}
+
+// ─── Sector Performance ────────────────────────────────────────────────────────
+export interface SectorPerformance {
+  sector:            string;
+  dayChangePct:      number;
+  weekChangePct:     number;
+  monthChangePct:    number;
+  ytdChangePct:      number;
+  relativeStrength:  number;
 }

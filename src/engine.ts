@@ -6,7 +6,7 @@ import { logger } from './utils/logger';
 import { round, signalLabel } from './utils/helpers';
 
 // Ingestion
-import { fetchTickerData, fetchFundamentals, fetchMacroSnapshot } from './ingestion/psxterminal-client';
+import { fetchTickerData, fetchFundamentals, fetchMacroSnapshot, fetchMarketBreadth, fetchSectorPerformance } from './ingestion/psxterminal-client';
 import { fetchAllNews, buildSentiment } from './ingestion/news-fetcher';
 
 // Preprocessing
@@ -139,11 +139,29 @@ export async function runAnalysisEngine(): Promise<RunOutput> {
 
   // Layer 1: parallel ingestion ─────────────────────────────────────────────
   logger.info('Layer 1 — ingesting data');
-  const [allNews, macro, holdings] = await Promise.all([
+  const [allNews, macro, holdings, marketBreadth, sectorPerformance] = await Promise.all([
     fetchAllNews(),
     fetchMacroSnapshot(),
     getHoldings(),
+    fetchMarketBreadth(),
+    fetchSectorPerformance(),
   ]);
+
+  // Log market breadth context
+  logger.info({
+    advancers:  marketBreadth.advancers,
+    decliners:  marketBreadth.decliners,
+    adRatio:    marketBreadth.advanceDeclineRatio,
+    newHighs:   marketBreadth.newHighs,
+    newLows:    marketBreadth.newLows,
+  }, 'Market breadth');
+
+  // Log sector performance context
+  const sortedSectors = [...sectorPerformance].sort((a, b) => b.dayChangePct - a.dayChangePct);
+  logger.info({
+    top: sortedSectors[0]?.sector,
+    bot: sortedSectors[sortedSectors.length - 1]?.sector,
+  }, 'Sector leaders/laggards');
 
   const filteredHoldings = holdings.filter(h => passesFilter(h.ticker, CONFIG.SHARIAH_MODE));
   logger.info({ total: holdings.length, filtered: filteredHoldings.length }, 'Holdings loaded');

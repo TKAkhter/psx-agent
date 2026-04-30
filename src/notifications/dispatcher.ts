@@ -6,7 +6,7 @@ import { sendEmailWithPdf } from './email-sender';
 import { sendWhatsAppWithPdf } from './whatsapp-sender';
 import { generatePdfReport } from '../reporting/pdf-builder';
 import { formatPkr, formatPct, round } from '../utils/helpers';
-import type { RunOutput, DeliveryLog } from '../types';
+import type { RunOutput, DeliveryLog, Alert } from '../types';
 
 // ─── WhatsApp condensed summary ───────────────────────────────────────────────
 function buildWaSummary(output: RunOutput): string {
@@ -65,7 +65,7 @@ function buildWaSummary(output: RunOutput): string {
 
 // ─── Main dispatcher ──────────────────────────────────────────────────────────
 export async function dispatchNotifications(output: RunOutput): Promise<DeliveryLog[]> {
-  const hasAlerts = (alerts: any[]) => alerts.some(a => a.severity !== 'INFO');
+  const hasAlerts = (a: Alert[]) => a.some(x => x.severity !== 'INFO');
 
   if (CONFIG.NOTIFY_ON_ALERT_ONLY && !hasAlerts(output.alerts)) {
     logger.info('NOTIFY_ON_ALERT_ONLY=true, no critical/warning alerts — skipping');

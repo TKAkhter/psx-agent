@@ -156,45 +156,89 @@ export function computeCompositeScore(
 }
 
 // ─── Price Targets ────────────────────────────────────────────────────────────
+// Uses multiple confluence zones for accuracy:
+//   - Technical: support/resistance, Bollinger, Keltner, Fibonacci, Pivot
+//   - Volatility-adjusted stop loss (2× ATR)
+//   - Hard stop: 8% below avg cost (capital preservation)
+//   - Parabolic SAR as trailing stop reference
+
 export function computePriceTargets(
   ti:           TechnicalIndicators,
   fundamentals: FundamentalData,
   currentPrice: number,
   avgCost?:     number,
 ): PriceTargets {
-  // Entry levels
-  // Aggressive: nearest support or Fib 61.8%
-  const aggressiveBuyAt = round(Math.max(
-    Math.min(ti.support1, ti.bbLower, ti.s1),
-    currentPrice * 0.97,      // no more than 3% below current
-  ));
-  // Conservative: confirmed demand zone (2nd support)
-  const conservativeBuyAt = round(Math.max(
-    Math.min(ti.support2, ti.fibRetracement618),
-    currentPrice * 0.93,
-  ));
+  // ── Aggressive entry: best nearby buy zone ──────────────────────────────
+  // Take the highest of: (nearest support, BB lower, Keltner lower, S1 pivot)
+  // then ensure we're not more than 4% below current price (realistic entry)
+  const buyZoneCandidates = [
+    ti.support1,
+    ti.bbLower,
+    ti.keltnerLower,
+    ti.s1,
+    ti.fibRetracement618,
+  ].filter(v => v > 0 && v < currentPrice);
 
-  // Upside targets based on resistance levels + Fib extensions
-  const target1 = round(Math.min(ti.resistance1, ti.r1, ti.bbUpper));
-  const target2 = round(Math.min(ti.resistance2, ti.r2));
-  const target3 = round(Math.max(ti.resistance3, currentPrice * 1.20));
+  const aggressiveBuyAt = round(
+    buyZoneCandidates.length > 0
+      ? Math.max(Math.max(...buyZoneCandidates), currentPrice * 0.96)
+      : currentPrice * 0.97,
+  );
 
-  // Stop loss: 2×ATR below current or 8% below avg cost, whichever is higher floor
-  const atrStop     = round(currentPrice - 2 * ti.atr14);
-  const hardStop    = round(avgCost ? avgCost * 0.92 : currentPrice * 0.92);
-  const stopLoss    = round(Math.max(atrStop, hardStop * 0.98));  // slight buffer
-  const hardStopLoss = round(hardStop);
+  // ── Conservative entry: deeper confirmed demand zone ────────────────────
+  const conservativeCandidates = [
+    ti.support2,
+    ti.fibRetracement618,
+    ti.parabolicSarSignal === 'bullish' ? ti.parabolicSarValue : 0,
+  ].filter(v => v > 0 && v < currentPrice * 0.98);
 
-  const riskRewardRatio    = round(safeDiv(target1 - aggressiveBuyAt, aggressiveBuyAt - stopLoss));
-  const potentialUpsidePct = round(safeDiv(target1 - currentPrice, currentPrice) * 100);
+  const conservativeBuyAt = round(
+    conservativeCandidates.length > 0
+      ? Math.max(Math.min(...conservativeCandidates), currentPrice * 0.91)
+      : currentPrice * 0.93,
+  );
+
+  // ── Upside targets ──────────────────────────────────────────────────────
+  // T1: nearest resistance (short-term, ~5–10% typically)
+  const t1Candidates = [ti.resistance1, ti.r1, ti.bbUpper, ti.keltnerUpper].filter(v => v > currentPrice);
+  const target1 = round(t1Candidates.length > 0 ? Math.min(...t1Candidates) : currentPrice * 1.07);
+
+  // T2: medium resistance (~12–18%)
+  const t2Candidates = [ti.resistance2, ti.r2, ti.fibRetracement382].filter(v => v > target1);
+  const target2 = round(t2Candidates.length > 0 ? Math.min(...t2Candidates) : currentPrice * 1.15);
+
+  // T3: full swing target — 52w high or +20–25% whichever is reasonable
+  const target3 = round(Math.max(ti.resistance3, currentPrice * 1.22));
+
+  // ── Stop loss ───────────────────────────────────────────────────────────
+  // Primary: 2× ATR below current (volatility-adjusted)
+  const atrStop = currentPrice - 2 * ti.atr14;
+  // Hard stop: 8% below avg cost (max pain before capital preservation kicks in)
+  const hardStop = avgCost ? avgCost * 0.92 : currentPrice * 0.92;
+  // Parabolic SAR provides an alternative trailing stop
+  const psarStop = ti.parabolicSarSignal === 'bullish' ? ti.parabolicSarValue : 0;
+  // Use the least restrictive (highest) of the technical stops, but never above current
+  const stopLoss    = round(Math.min(currentPrice * 0.995, Math.max(atrStop, psarStop > 0 ? psarStop * 0.995 : 0)));
+  const hardStopLoss = round(Math.max(hardStop, atrStop * 0.99));  // absolute floor
+
+  // ── Risk metrics ─────────────────────────────────────────────────────────
+  const riskPerUnit          = aggressiveBuyAt - stopLoss;
+  const rewardPerUnit        = target1 - aggressiveBuyAt;
+  const riskRewardRatio      = round(safeDiv(rewardPerUnit, Math.max(0.01, riskPerUnit)));
+  const potentialUpsidePct   = round(safeDiv(target1 - currentPrice, currentPrice) * 100);
   const potentialDownsidePct = round(safeDiv(currentPrice - stopLoss, currentPrice) * 100);
 
-  const pct = potentialUpsidePct;
-  const currentVsTargetLabel =
-    currentPrice <= aggressiveBuyAt ? `At buy zone — Target 1 is +${pct.toFixed(1)}% (PKR ${target1})` :
-    currentPrice <= target1          ? `Below T1 — ${pct.toFixed(1)}% upside to PKR ${target1}` :
-    currentPrice <= target2          ? `Between T1/T2 — T2 is PKR ${target2}` :
-                                       `Near/above T2 — consider trimming`;
+  // ── Human-readable context label ─────────────────────────────────────────
+  let currentVsTargetLabel: string;
+  if (currentPrice <= aggressiveBuyAt) {
+    currentVsTargetLabel = `✅ IN BUY ZONE — Entry PKR ${aggressiveBuyAt}, Target 1 is +${potentialUpsidePct.toFixed(1)}% at PKR ${target1}`;
+  } else if (currentPrice <= target1 * 0.97) {
+    currentVsTargetLabel = `📈 ${potentialUpsidePct.toFixed(1)}% upside to Target 1 (PKR ${target1}). Stop at PKR ${stopLoss}`;
+  } else if (currentPrice <= target2) {
+    currentVsTargetLabel = `⚠️ Between T1/T2 — partially take profits. T2 at PKR ${target2}`;
+  } else {
+    currentVsTargetLabel = `🔴 Near/above T2 (PKR ${target2}) — consider full profit-taking`;
+  }
 
   return {
     aggressiveBuyAt, conservativeBuyAt,

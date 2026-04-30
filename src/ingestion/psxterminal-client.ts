@@ -211,3 +211,46 @@ export async function fetchMacroSnapshot(): Promise<MacroSnapshot> {
     imfProgrammeActive: true,
   };
 }
+
+
+// ─── Market Breadth ───────────────────────────────────────────────────────────
+// Provides advance/decline ratio for KSE-100 — used for overall market context
+
+export async function fetchMarketBreadth(): Promise<import('../types').MarketBreadth> {
+  // TODO: live endpoint → GET /market/breadth
+  const live = await psx<{ data: import('../types').MarketBreadth }>('/market/breadth');
+  if (live?.data) return live.data;
+
+  // Mock: slight bullish bias on average
+  const advancers  = Math.floor(40 + Math.random() * 50);
+  const decliners  = Math.floor(20 + Math.random() * 50);
+  const unchanged  = 100 - advancers - decliners;
+  return {
+    advancers,
+    decliners,
+    unchanged: Math.max(0, unchanged),
+    totalVolume: Math.floor(200_000_000 + Math.random() * 400_000_000),
+    totalValue:  Math.floor(5_000_000_000 + Math.random() * 8_000_000_000),
+    advanceDeclineRatio: parseFloat((advancers / Math.max(1, decliners)).toFixed(2)),
+    newHighs: Math.floor(Math.random() * 12),
+    newLows:  Math.floor(Math.random() * 8),
+  };
+}
+
+// ─── Sector Performance ───────────────────────────────────────────────────────
+
+export async function fetchSectorPerformance(): Promise<import('../types').SectorPerformance[]> {
+  // TODO: live endpoint → GET /market/sectors
+  const live = await psx<{ data: import('../types').SectorPerformance[] }>('/market/sectors');
+  if (live?.data) return live.data;
+
+  const sectors = ['Banking','Oil & Gas','Energy','Fertilizer','Cement','Technology','Conglomerate','Insurance','Textile'];
+  return sectors.map(sector => ({
+    sector,
+    dayChangePct:   parseFloat((-3 + Math.random() * 6).toFixed(2)),
+    weekChangePct:  parseFloat((-8 + Math.random() * 16).toFixed(2)),
+    monthChangePct: parseFloat((-15 + Math.random() * 30).toFixed(2)),
+    ytdChangePct:   parseFloat((-20 + Math.random() * 50).toFixed(2)),
+    relativeStrength: parseFloat((0.5 + Math.random() * 1.5).toFixed(2)),
+  }));
+}

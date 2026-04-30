@@ -1,337 +1,485 @@
 /**
- * PDF Report Builder
- * Uses Puppeteer to render a rich HTML report → PDF buffer
- * The PDF is then attached to both email and WhatsApp
+ * PDF Report Builder — PSX Analyzer v2
+ *
+ * Generates a rich HTML report then converts to PDF via Puppeteer.
+ * Designed for TWO audiences:
+ *   - NOOB SECTION: Large, colour-coded verdict cards with plain-English guidance
+ *   - PRO SECTION: Full indicator grid, signal breakdown, score breakdown
  */
 import puppeteer from 'puppeteer';
 import { format } from 'date-fns';
-import { formatPkr, formatPct, round } from '../utils/helpers';
+import { round, formatPkr, formatPct } from '../utils/helpers';
 import { logger } from '../utils/logger';
-import type { RunOutput, StockRecommendation, Alert } from '../types';
+import type { RunOutput, StockRecommendation } from '../types';
 
-// ─── Color helpers ────────────────────────────────────────────────────────────
+// ─── Constants ─────────────────────────────────────────────────────────────────
 
 const SIG_COLOR: Record<string, string> = {
-  STRONG_BUY:  '#0a6e3c', BUY: '#2d8a4e', HOLD: '#8a6d00',
-  SELL:        '#c0392b', STRONG_SELL: '#6b0a0a',
+  STRONG_BUY: '#0a6e3c', BUY: '#1a8a50', HOLD: '#8a6d00',
+  SELL: '#b83232', STRONG_SELL: '#7a0a0a',
 };
 const SIG_BG: Record<string, string> = {
-  STRONG_BUY:'#e6f9ef',BUY:'#f0fff6',HOLD:'#fffbe6',SELL:'#fff0ee',STRONG_SELL:'#fce8e8',
+  STRONG_BUY: '#e6f9ef', BUY: '#f0fff6', HOLD: '#fffbe6',
+  SELL: '#fff0ee', STRONG_SELL: '#fde8e8',
 };
-const SEV_COLOR: Record<string, string> = { CRITICAL:'#c0392b', WARNING:'#e67e22', INFO:'#2980b9' };
-const STANCE_COLOR: Record<string, string> = { bullish:'#0a6e3c', bearish:'#c0392b', neutral:'#555', cautious:'#b07000' };
+const SEV_COLOR: Record<string, string> = {
+  CRITICAL: '#b83232', WARNING: '#c97a00', INFO: '#1a6fb5',
+};
+const STANCE_COLOR: Record<string, string> = {
+  bullish: '#0a6e3c', bearish: '#b83232', neutral: '#555555', cautious: '#c97a00',
+};
 
-function pct(v: number) { return `<span style="color:${v>=0?'#0a6e3c':'#c0392b'}">${formatPct(v)}</span>`; }
+// ─── Utility helpers ─────────────────────────────────────────────────────────
 
-function badge(signal: string) {
-  return `<span style="background:${SIG_COLOR[signal]};color:#fff;padding:3px 10px;border-radius:4px;font-size:12px;font-weight:700;letter-spacing:.5px">${signal.replace('_',' ')}</span>`;
+function badge(signal: string, large = false): string {
+  const sz = large ? 'font-size:15px;padding:6px 18px' : 'font-size:12px;padding:3px 10px';
+  return `<span style="background:${SIG_COLOR[signal] ?? '#555'};color:#fff;${sz};border-radius:5px;font-weight:700;letter-spacing:.4px;white-space:nowrap">${signal.replace('_', ' ')}</span>`;
 }
 
-function scoreBar(score: number) {
-  const color = score>=75?'#0a6e3c':score>=55?'#b07000':score>=35?'#e67e22':'#c0392b';
-  return `<div style="display:flex;align-items:center;gap:8px">
-    <div style="flex:1;height:8px;background:#eee;border-radius:4px">
-      <div style="width:${score}%;height:8px;background:${color};border-radius:4px"></div>
+function scoreDonut(score: number, grade: string): string {
+  const color = score >= 75 ? '#0a6e3c' : score >= 55 ? '#c97a00' : score >= 35 ? '#e67e22' : '#b83232';
+  return `<div style="display:inline-flex;flex-direction:column;align-items:center;min-width:64px">
+    <div style="width:56px;height:56px;border-radius:50%;background:conic-gradient(${color} ${score * 3.6}deg,#e8e8e8 0deg);display:flex;align-items:center;justify-content:center">
+      <div style="width:42px;height:42px;border-radius:50%;background:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:15px;color:${color}">${score}</div>
     </div>
-    <span style="font-weight:700;color:${color};min-width:32px;font-size:13px">${score}</span>
+    <div style="font-size:11px;font-weight:700;color:${color};margin-top:3px">Grade ${grade}</div>
   </div>`;
 }
 
-// ─── Individual stock card ─────────────────────────────────────────────────────
-function stockCard(rec: StockRecommendation, aiReview: RunOutput['aiReview'], isPortfolio: boolean): string {
-  const ai = isPortfolio
-    ? aiReview.portfolioReview.find(r => r.ticker === rec.ticker)
-    : aiReview.discoveryReview.find(r => r.ticker === rec.ticker);
+function scoreBar(label: string, value: number, maxWidth = '160px'): string {
+  const color = value >= 70 ? '#0a6e3c' : value >= 50 ? '#c97a00' : '#b83232';
+  return `<div style="margin:4px 0">
+    <div style="display:flex;justify-content:space-between;font-size:11px;color:#555;margin-bottom:2px">
+      <span>${label}</span><span style="font-weight:700;color:${color}">${value}</span>
+    </div>
+    <div style="height:6px;background:#eee;border-radius:3px;max-width:${maxWidth}">
+      <div style="height:6px;width:${value}%;background:${color};border-radius:3px"></div>
+    </div>
+  </div>`;
+}
 
-  const pos = rec.position;
-  const ti  = rec.technicals;
-  const pt  = rec.priceTargets;
-  const f   = rec.fundamentals;
+function indCell(label: string, value: string | number, highlight?: 'green' | 'red' | 'amber'): string {
+  const color = highlight === 'green' ? '#0a6e3c' : highlight === 'red' ? '#b83232' : highlight === 'amber' ? '#c97a00' : '#1a1a1a';
+  return `<div style="background:#f7f7f7;border-radius:6px;padding:7px 10px;min-width:110px">
+    <div style="font-size:10px;color:#888;margin-bottom:2px;text-transform:uppercase;letter-spacing:.3px">${label}</div>
+    <div style="font-weight:700;font-size:13px;color:${color}">${value}</div>
+  </div>`;
+}
 
-  const valBadge = (label: string, val: string, sub?: string) =>
-    `<div style="background:#f8f8f8;border-radius:6px;padding:8px 12px;min-width:100px">
-      <div style="font-size:11px;color:#888;margin-bottom:2px">${label}</div>
-      <div style="font-weight:700;font-size:14px">${val}</div>
-      ${sub ? `<div style="font-size:10px;color:#aaa">${sub}</div>` : ''}
-    </div>`;
+function plColor(v: number): string { return v >= 0 ? '#0a6e3c' : '#b83232'; }
 
-  const sigRow = (label: string, sigs: {name:string;description:string}[]) =>
-    sigs.length ? `<div style="margin:4px 0"><span style="font-size:11px;color:#888;width:70px;display:inline-block">${label}</span>
-      ${sigs.map(s=>`<span style="font-size:11px;background:#e8f5ff;color:#1a5276;padding:2px 6px;border-radius:3px;margin:2px">${s.name}</span>`).join('')}
-    </div>` : '';
+// ─── Noob verdict card ─────────────────────────────────────────────────────────
+// Large, simple, colour-coded — the first thing anyone sees for each stock
+
+function noobCard(rec: StockRecommendation, aiReview: RunOutput['aiReview']): string {
+  const ai   = aiReview.portfolioReview.find(r => r.ticker === rec.ticker)
+            ?? aiReview.discoveryReview.find(r => r.ticker === rec.ticker);
+  const sig  = ai?.finalSignal ?? rec.signal;
+  const bg   = SIG_BG[sig] ?? '#f9f9f9';
+  const col  = SIG_COLOR[sig] ?? '#555';
+  const pos  = rec.position;
+
+  // Extract noob sentence from AI reasoning
+  const reasoning = ai?.reasoning ?? '';
+  const noobMatch = reasoning.match(/NOOB:\s*([^.]+\.)/i);
+  const proMatch  = reasoning.match(/PRO:\s*(.+)$/i);
+  const noobText  = noobMatch ? noobMatch[1].trim() : reasoning.split('.')[0] + '.';
+  const proText   = proMatch  ? proMatch[1].trim()  : '';
+
+  // Decide action phrase
+  const actionMap: Record<string, string> = {
+    STRONG_BUY:  '🟢 BUY NOW — Strong opportunity',
+    BUY:         '🟢 BUY — Good entry here',
+    HOLD:        '🟡 HOLD — Keep your position',
+    SELL:        '🔴 SELL — Time to exit',
+    STRONG_SELL: '🔴 SELL IMMEDIATELY — Exit now',
+  };
+  const action = actionMap[sig] ?? sig;
 
   return `
-  <div style="border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin:12px 0;background:#fff;page-break-inside:avoid">
-
-    <!-- Header row -->
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px;margin-bottom:14px">
-      <div>
-        <span style="font-size:20px;font-weight:800;color:#111">${rec.ticker}</span>
-        <span style="font-size:14px;color:#555;margin-left:10px">${rec.name}</span>
-        <span style="font-size:11px;background:#f0f0f0;color:#555;padding:2px 8px;border-radius:12px;margin-left:8px">${rec.sector}</span>
-        ${rec.shariah ? '<span style="font-size:11px;background:#e8f5e9;color:#2d6a4f;padding:2px 8px;border-radius:12px;margin-left:4px">☽ Shariah</span>' : ''}
+<div style="border:2px solid ${col};border-radius:12px;padding:20px 24px;margin:10px 0;background:${bg};page-break-inside:avoid">
+  <!-- Header -->
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:12px;margin-bottom:16px">
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-size:22px;font-weight:900;color:#111">${rec.ticker}</span>
+        <span style="font-size:14px;color:#555">${rec.name}</span>
+        <span style="font-size:11px;background:#f0f0f0;color:#555;padding:2px 8px;border-radius:10px">${rec.sector}</span>
+        ${rec.shariah ? '<span style="font-size:11px;background:#e8f5e9;color:#2d6a4f;padding:2px 8px;border-radius:10px">☽ Shariah</span>' : ''}
       </div>
-      <div style="text-align:right">
-        ${badge(rec.signal)}
-        <div style="font-size:12px;color:#888;margin-top:4px">Score: ${rec.compositeScore.composite}/100 (${rec.compositeScore.grade})</div>
-      </div>
+      <div style="margin-top:6px;font-size:24px;font-weight:800;color:${col}">${action}</div>
     </div>
+    ${scoreDonut(rec.compositeScore.composite, rec.compositeScore.grade)}
+  </div>
 
-    <!-- Price row -->
-    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px">
-      ${valBadge('Current Price', `PKR ${rec.currentPrice}`, pct(rec.dayChangePct)+' today')}
-      ${pos ? valBadge('Avg Cost', `PKR ${pos.avgCost}`, `${pos.shares.toLocaleString()} shares`) : ''}
-      ${pos ? valBadge('Unrealised P&L', formatPkr(pos.unrealisedPlPkr), pct(pos.unrealisedPlPct)) : ''}
-      ${pos ? valBadge('Portfolio Weight', `${round(pos.portfolioWeightPct,1)}%`, '') : ''}
-      ${valBadge('52W High', `PKR ${rec.technicals.resistance3}`,'')}
-      ${valBadge('52W Low',  `PKR ${rec.technicals.support3}`,'')}
+  <!-- Simple price boxes — what matters to a noob -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+    <div style="background:#fff;border:1.5px solid #e0e0e0;border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#888;margin-bottom:4px">Current Price</div>
+      <div style="font-size:20px;font-weight:800">PKR ${rec.currentPrice}</div>
+      <div style="font-size:11px;color:${plColor(rec.dayChangePct)}">${formatPct(rec.dayChangePct)} today</div>
     </div>
-
-    <!-- Price Targets -->
-    <div style="background:#f0fff4;border-left:4px solid #2d8a4e;padding:12px 16px;border-radius:0 8px 8px 0;margin-bottom:14px">
-      <div style="font-weight:700;font-size:13px;color:#2d6a4f;margin-bottom:8px">PRICE TARGETS & ACTION LEVELS</div>
-      <div style="display:flex;flex-wrap:wrap;gap:12px;font-size:13px">
-        <div><span style="color:#888">Aggressive Buy:</span> <strong>PKR ${pt.aggressiveBuyAt}</strong></div>
-        <div><span style="color:#888">Conservative Buy:</span> <strong>PKR ${pt.conservativeBuyAt}</strong></div>
-        <div><span style="color:#2d8a4e">Target 1:</span> <strong style="color:#2d8a4e">PKR ${pt.target1}</strong> <span style="color:#888;font-size:11px">(+${pt.potentialUpsidePct}%)</span></div>
-        <div><span style="color:#2d8a4e">Target 2:</span> <strong>PKR ${pt.target2}</strong></div>
-        <div><span style="color:#2d8a4e">Target 3:</span> <strong>PKR ${pt.target3}</strong></div>
-        <div><span style="color:#c0392b">Stop Loss:</span> <strong style="color:#c0392b">PKR ${pt.stopLoss}</strong> <span style="color:#888;font-size:11px">(-${pt.potentialDownsidePct}%)</span></div>
-        <div><span style="color:#888">Risk/Reward:</span> <strong>${pt.riskRewardRatio}:1</strong></div>
-      </div>
-      <div style="font-size:12px;color:#666;margin-top:6px">📍 ${pt.currentVsTargetLabel}</div>
-      ${rec.suggestedReplacement ? `<div style="margin-top:6px;font-size:12px;color:#8a4000">💡 If selling, consider buying <strong>${rec.suggestedReplacement}</strong> instead</div>` : ''}
+    <div style="background:#e6f9ef;border:1.5px solid #a0d9b4;border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#2d6a4f;margin-bottom:4px">Buy at or below</div>
+      <div style="font-size:20px;font-weight:800;color:#0a6e3c">PKR ${rec.priceTargets.aggressiveBuyAt}</div>
+      <div style="font-size:10px;color:#555">Aggressive entry</div>
     </div>
-
-    <!-- Technical Indicators Grid -->
-    <div style="margin-bottom:14px">
-      <div style="font-weight:700;font-size:12px;color:#333;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Technical Indicators</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:6px;font-size:12px">
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">RSI-14</span><br><strong style="color:${ti.rsi14<30?'#2d8a4e':ti.rsi14>70?'#c0392b':'#333'}">${round(ti.rsi14)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">MACD</span><br><strong>${ti.macdSignal.replace('_',' ')}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">ADX-14</span><br><strong style="color:${ti.adx14>25?'#2d8a4e':'#888'}">${round(ti.adx14)} ${ti.adx14>25?'(Trending)':'(Weak)'}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">Stoch K/D</span><br><strong>${round(ti.stochasticK)}/${round(ti.stochasticD)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">Williams %R</span><br><strong style="color:${ti.williamsR<-80?'#2d8a4e':ti.williamsR>-20?'#c0392b':'#333'}">${round(ti.williamsR)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">MFI-14</span><br><strong style="color:${ti.mfi14<20?'#2d8a4e':ti.mfi14>80?'#c0392b':'#333'}">${round(ti.mfi14)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">CCI-20</span><br><strong>${round(ti.cci20)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">CMF</span><br><strong style="color:${ti.chaikinMoneyFlow>0?'#2d8a4e':'#c0392b'}">${round(ti.chaikinMoneyFlow,3)}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">OBV Trend</span><br><strong style="color:${ti.obvTrend==='accumulation'?'#2d8a4e':ti.obvTrend==='distribution'?'#c0392b':'#888'}">${ti.obvTrend}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">BB Position</span><br><strong>${ti.bbPosition.replace(/_/g,' ')}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">Ichimoku</span><br><strong style="color:${ti.ichimokuSignal==='above_cloud'?'#2d8a4e':ti.ichimokuSignal==='below_cloud'?'#c0392b':'#888'}">${ti.ichimokuSignal.replace(/_/g,' ')}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">Trend</span><br><strong>${ti.trendShort}/${ti.trendMid}/${ti.trendLong}</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">ATR (vol)</span><br><strong>${round(ti.atr14)} (${round(ti.atrPct)}%)</strong></div>
-        <div style="background:#f9f9f9;padding:6px 10px;border-radius:5px"><span style="color:#888">Candle</span><br><strong>${ti.candlestickPattern.replace(/_/g,' ')}</strong></div>
-        ${ti.rsiDivergence!=='none'?`<div style="background:#fffbe6;padding:6px 10px;border-radius:5px"><span style="color:#888">RSI Divergence</span><br><strong style="color:#b07000">${ti.rsiDivergence}</strong></div>`:''}
-        ${ti.bbSqueeze?`<div style="background:#fffbe6;padding:6px 10px;border-radius:5px"><span style="color:#888">BB Squeeze</span><br><strong style="color:#b07000">⚡ Active</strong></div>`:''}
-      </div>
+    <div style="background:#e6f9ef;border:1.5px solid #a0d9b4;border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#2d6a4f;margin-bottom:4px">Take profit at</div>
+      <div style="font-size:20px;font-weight:800;color:#0a6e3c">PKR ${rec.priceTargets.target1}</div>
+      <div style="font-size:10px;color:#555">+${rec.priceTargets.potentialUpsidePct}% upside</div>
     </div>
-
-    <!-- Technical Signal Summary -->
-    <div style="background:#f5f5f5;padding:10px 14px;border-radius:6px;margin-bottom:14px;font-size:12px">
-      ${sigRow('BUY', rec.signalResult.buySignals.slice(0,5))}
-      ${sigRow('SELL', rec.signalResult.sellSignals.slice(0,5))}
-      <div style="margin-top:6px;color:#444"><em>${rec.signalResult.technicalSummary}</em></div>
+    <div style="background:#fff0ee;border:1.5px solid #f0b4b4;border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#8a2222;margin-bottom:4px">Exit if falls to</div>
+      <div style="font-size:20px;font-weight:800;color:#b83232">PKR ${rec.priceTargets.stopLoss}</div>
+      <div style="font-size:10px;color:#555">Stop-loss (-${rec.priceTargets.potentialDownsidePct}%)</div>
     </div>
-
-    <!-- Fundamentals row -->
-    <div style="margin-bottom:14px">
-      <div style="font-weight:700;font-size:12px;color:#333;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Fundamentals</div>
-      <div style="display:flex;flex-wrap:wrap;gap:8px;font-size:12px">
-        ${[
-          ['P/E (TTM)',`${round(f.peRatioTtm)} vs sector ${f.sectorAvgPe}`],
-          ['P/E (Fwd)', round(f.peRatioForward)],
-          ['P/B', round(f.pbRatio)],
-          ['EV/EBITDA', round(f.evEbitda)],
-          ['ROE', `${round(f.roeTtm)}%`],
-          ['ROIC', `${round(f.roicTtm)}%`],
-          ['Net Margin', `${round(f.netProfitMarginPct)}%`],
-          ['EPS TTM', `PKR ${round(f.epsTtm)}`],
-          ['EPS Growth', `${round(f.epsGrowthYoy)}% YoY`],
-          ['Div Yield', `${round(f.dividendYieldPct)}%`],
-          ['Div/Share', `PKR ${round(f.dividendPerShare)}`],
-          ['Div Years', f.consecutiveDividendYears],
-          ['D/E', round(f.debtToEquity)],
-          ['Curr Ratio', round(f.currentRatio)],
-          ['Int Cover', `${round(f.interestCoverageRatio)}x`],
-          ['FCF Yield', `${round(f.freeCashFlowYield)}%`],
-          ['Rev Growth', `${round(f.revenueGrowthYoy)}% YoY`],
-        ].map(([l,v])=>`<div style="background:#f9f9f9;padding:5px 10px;border-radius:5px"><span style="color:#888">${l}</span><br><strong>${v}</strong></div>`).join('')}
-      </div>
-    </div>
-
-    <!-- Score breakdown -->
-    <div style="margin-bottom:14px">
-      <div style="font-weight:700;font-size:12px;color:#333;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Composite Score Breakdown</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px">
-        ${[['Technical',rec.compositeScore.technical],['Sentiment',rec.compositeScore.sentiment],
-           ['Fundamental',rec.compositeScore.fundamental],['Macro',rec.compositeScore.macro]].map(([l,v])=>`
-          <div><span style="color:#888;display:inline-block;width:90px">${l}</span>${scoreBar(v as number)}</div>`).join('')}
-      </div>
-      <div style="margin-top:6px;font-size:12px;color:#555"><em>${rec.compositeScore.interpretation}</em></div>
-    </div>
-
-    <!-- AI Review -->
-    ${ai ? `<div style="background:#f0f4ff;border-left:4px solid #2980b9;padding:12px 16px;border-radius:0 8px 8px 0">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-        <span style="font-weight:700;font-size:13px">AI Review</span>
-        <span style="font-size:12px;padding:2px 8px;border-radius:4px;background:${ai.aiValidation==='AGREE'?'#e8f5e9':ai.aiValidation==='DISAGREE'?'#fce8e8':'#fffbe6'};color:${ai.aiValidation==='AGREE'?'#2d6a4f':ai.aiValidation==='DISAGREE'?'#6b0a0a':'#8a6d00'}">${ai.aiValidation}</span>
-        <span style="font-size:12px;color:#888">Confidence: ${ai.confidence}</span>
-        ${ai.finalSignal !== rec.signal ? badge(ai.finalSignal) : ''}
-      </div>
-      <p style="margin:0 0 8px;font-size:13px;color:#333;line-height:1.6">${ai.reasoning}</p>
-      ${ai.buyPriceView  ? `<div style="font-size:12px">🟢 AI Buy: <strong>PKR ${ai.buyPriceView}</strong></div>` : ''}
-      ${ai.sellPriceView ? `<div style="font-size:12px">🔴 AI Sell: <strong>PKR ${ai.sellPriceView}</strong></div>` : ''}
-      ${ai.stopLossView  ? `<div style="font-size:12px">⛔ AI Stop: <strong>PKR ${ai.stopLossView}</strong></div>` : ''}
-      ${ai.keyCatalysts.length ? `<div style="font-size:12px;margin-top:4px;color:#2d6a4f">✅ Catalysts: ${ai.keyCatalysts.join(' · ')}</div>` : ''}
-      ${ai.keyRisks.length     ? `<div style="font-size:12px;margin-top:2px;color:#c0392b">⚠️ Risks: ${ai.keyRisks.join(' · ')}</div>` : ''}
-      ${ai.shariahNote ? `<div style="font-size:12px;margin-top:4px;color:#2d6a4f">☽ ${ai.shariahNote}</div>` : ''}
+    ${pos ? `<div style="background:#fff;border:1.5px solid #e0e0e0;border-radius:8px;padding:12px;text-align:center">
+      <div style="font-size:11px;color:#888;margin-bottom:4px">Your P&L</div>
+      <div style="font-size:20px;font-weight:800;color:${plColor(pos.unrealisedPlPct)}">${formatPct(pos.unrealisedPlPct)}</div>
+      <div style="font-size:11px;color:${plColor(pos.unrealisedPlPkr)}">${formatPkr(pos.unrealisedPlPkr)}</div>
     </div>` : ''}
-  </div>`;
+  </div>
+
+  <!-- Plain English explanation -->
+  <div style="background:rgba(255,255,255,0.7);border-radius:8px;padding:14px 16px;margin-bottom:${proText ? '10px' : '0'}">
+    <div style="font-size:13px;color:#333;line-height:1.7">${noobText}</div>
+  </div>
+
+  ${proText ? `<div style="background:rgba(0,0,0,0.03);border-radius:8px;padding:10px 14px;border-left:3px solid ${col}">
+    <div style="font-size:11px;color:#888;margin-bottom:3px;font-weight:600">ANALYST NOTE</div>
+    <div style="font-size:12px;color:#444;line-height:1.6">${proText}</div>
+  </div>` : ''}
+
+  <!-- AI price views if they differ from algorithm -->
+  ${ai && (ai.buyPriceView || ai.sellPriceView) ? `
+  <div style="margin-top:10px;font-size:12px;color:#555;display:flex;gap:12px;flex-wrap:wrap">
+    ${ai.buyPriceView  ? `<span>🤖 AI Buy view: <strong>PKR ${ai.buyPriceView}</strong></span>`  : ''}
+    ${ai.sellPriceView ? `<span>🤖 AI Sell view: <strong>PKR ${ai.sellPriceView}</strong></span>` : ''}
+    ${ai.stopLossView  ? `<span>🤖 AI Stop: <strong>PKR ${ai.stopLossView}</strong></span>`       : ''}
+  </div>` : ''}
+
+  ${rec.suggestedReplacement ? `
+  <div style="margin-top:10px;padding:10px 14px;background:#fff8e6;border-radius:6px;font-size:13px;color:#7a5000">
+    💡 <strong>If you sell ${rec.ticker}:</strong> Consider buying <strong>${rec.suggestedReplacement}</strong> instead (currently rated higher in your portfolio)
+  </div>` : ''}
+
+  ${ai?.keyRisks?.length ? `
+  <div style="margin-top:8px;font-size:11px;color:#b83232">
+    ⚠️ <strong>Risks:</strong> ${ai.keyRisks.join(' · ')}
+  </div>` : ''}
+  ${ai?.keyCatalysts?.length ? `
+  <div style="margin-top:4px;font-size:11px;color:#0a6e3c">
+    ✅ <strong>Catalysts:</strong> ${ai.keyCatalysts.join(' · ')}
+  </div>` : ''}
+</div>`;
 }
 
-// ─── Full HTML report ─────────────────────────────────────────────────────────
-function buildHtml(output: RunOutput): string {
-  const { runAt, macro: m, portfolioRecs, discoveryPicks, alerts, sectorConcentration,
-          aiReview, totalPortfolioValue, totalCostBasis, totalUnrealisedPl, totalUnrealisedPlPct,
-          circuitBreakerActive } = output;
+// ─── Pro indicator panel ──────────────────────────────────────────────────────
 
-  const dateStr = format(runAt, 'EEEE, d MMMM yyyy — HH:mm');
-  const critAlerts = alerts.filter(a=>a.severity==='CRITICAL');
-  const warnAlerts = alerts.filter(a=>a.severity==='WARNING');
+function proPanel(rec: StockRecommendation): string {
+  const ti = rec.technicals;
+  const f  = rec.fundamentals;
+  const pt = rec.priceTargets;
+
+  const rsiColor = ti.rsi14 < 30 ? 'green' : ti.rsi14 > 70 ? 'red' : undefined;
+  const adxStr   = `${round(ti.adx14)} ${ti.adx14 > 25 ? '(Trending)' : '(Weak)'}`;
+  const cmfColor = ti.chaikinMoneyFlow > 0.1 ? 'green' : ti.chaikinMoneyFlow < -0.1 ? 'red' : undefined;
+
+  return `
+<div style="border:1px solid #e0e0e0;border-radius:10px;padding:18px;margin:6px 0 16px;background:#fff;page-break-inside:avoid">
+  <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px">
+    ${rec.ticker} — Professional Analysis
+  </div>
+
+  <!-- Price Targets Full Table -->
+  <div style="background:#f0fff4;border-left:3px solid #0a6e3c;padding:10px 14px;border-radius:0 8px 8px 0;margin-bottom:14px;font-size:12px">
+    <div style="font-weight:700;color:#0a6e3c;margin-bottom:6px">PRICE LEVELS</div>
+    <div style="display:flex;flex-wrap:wrap;gap:10px">
+      ${[
+        ['Conservative Buy', `PKR ${pt.conservativeBuyAt}`, ''],
+        ['Aggressive Buy',   `PKR ${pt.aggressiveBuyAt}`, ''],
+        ['Target 1 (+' + pt.potentialUpsidePct + '%)', `PKR ${pt.target1}`, ''],
+        ['Target 2',         `PKR ${pt.target2}`, ''],
+        ['Target 3',         `PKR ${pt.target3}`, ''],
+        ['ATR Stop-Loss',    `PKR ${pt.stopLoss}`, ''],
+        ['Hard Stop (8%)',   `PKR ${pt.hardStopLoss}`, ''],
+        ['Risk/Reward',      `${pt.riskRewardRatio}:1`, ''],
+        ['Fib 61.8%',        `PKR ${ti.fibRetracement618.toFixed(2)}`, ''],
+        ['Pivot',            `PKR ${ti.pivot.toFixed(2)}`, ''],
+      ].map(([l, v]) => `<div style="white-space:nowrap"><span style="color:#666">${l}:</span> <strong>${v}</strong></div>`).join('')}
+    </div>
+    <div style="margin-top:6px;color:#555;font-size:11px">📍 ${pt.currentVsTargetLabel}</div>
+  </div>
+
+  <!-- Score Breakdown -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">COMPOSITE SCORE BREAKDOWN</div>
+    ${scoreBar('Technical', rec.compositeScore.technical)}
+    ${scoreBar('Fundamental', rec.compositeScore.fundamental)}
+    ${scoreBar('Macro', rec.compositeScore.macro)}
+    ${scoreBar('Sentiment', rec.compositeScore.sentiment)}
+    <div style="margin-top:6px;font-size:11px;color:#555;font-style:italic">${rec.compositeScore.interpretation}</div>
+  </div>
+
+  <!-- Technical Indicators Grid -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">TECHNICAL INDICATORS</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">
+      ${indCell('RSI-14', round(ti.rsi14), rsiColor as any)}
+      ${indCell('RSI-9', round(ti.rsi9))}
+      ${indCell('RSI Div', ti.rsiDivergence !== 'none' ? ti.rsiDivergence : '—', ti.rsiDivergence === 'bullish' ? 'green' : ti.rsiDivergence === 'bearish' ? 'red' : undefined)}
+      ${indCell('MACD', ti.macdSignal.replace('_',' '), ti.macdSignal.includes('bullish') ? 'green' : ti.macdSignal.includes('bearish') ? 'red' : undefined)}
+      ${indCell('Stoch K/D', `${round(ti.stochasticK)}/${round(ti.stochasticD)}`)}
+      ${indCell('Williams %R', round(ti.williamsR), ti.williamsR < -80 ? 'green' : ti.williamsR > -20 ? 'red' : undefined)}
+      ${indCell('CCI-20', round(ti.cci20), ti.cci20 < -100 ? 'green' : ti.cci20 > 100 ? 'red' : undefined)}
+      ${indCell('MFI-14', round(ti.mfi14), ti.mfi14 < 20 ? 'green' : ti.mfi14 > 80 ? 'red' : undefined)}
+      ${indCell('ADX-14', adxStr, ti.adx14 > 25 ? 'green' : 'amber')}
+      ${indCell('+DI / -DI', `${round(ti.diPlus)} / ${round(ti.diMinus)}`, ti.diPlus > ti.diMinus ? 'green' : 'red')}
+      ${indCell('BB Position', ti.bbPosition.replace(/_/g,' '))}
+      ${indCell('BB Squeeze', ti.bbSqueeze ? '⚡ YES' : 'No', ti.bbSqueeze ? 'amber' : undefined)}
+      ${indCell('Keltner', ti.keltnerPosition, ti.keltnerPosition === 'below' ? 'green' : ti.keltnerPosition === 'above' ? 'red' : undefined)}
+      ${indCell('PSAR', ti.parabolicSarSignal, ti.parabolicSarSignal === 'bullish' ? 'green' : 'red')}
+      ${indCell('Ichimoku', ti.ichimokuSignal.replace(/_/g,' '), ti.ichimokuSignal === 'above_cloud' ? 'green' : ti.ichimokuSignal === 'below_cloud' ? 'red' : 'amber')}
+      ${indCell('OBV Trend', ti.obvTrend, ti.obvTrend === 'accumulation' ? 'green' : ti.obvTrend === 'distribution' ? 'red' : undefined)}
+      ${indCell('OBV Div', ti.obvDivergence !== 'none' ? ti.obvDivergence : '—', ti.obvDivergence === 'bullish' ? 'green' : ti.obvDivergence === 'bearish' ? 'red' : undefined)}
+      ${indCell('CMF', round(ti.chaikinMoneyFlow, 3), cmfColor as any)}
+      ${indCell('Vol Ratio', `${round(ti.volumeRatio)}×`, ti.volumeRatio > 2 ? 'amber' : undefined)}
+      ${indCell('ATR (14)', `${round(ti.atr14)} (${round(ti.atrPct)}%)`)}
+      ${indCell('HV-30', `${round(ti.historicalVolatility30d)}%`)}
+      ${indCell('Vs VWAP', `${round(ti.priceVsVwapPct)}%`, ti.priceVsVwapPct < -3 ? 'green' : ti.priceVsVwapPct > 3 ? 'red' : undefined)}
+      ${indCell('Vs 52W Hi', `${round(ti.priceVs52wHighPct)}%`, ti.priceVs52wHighPct > -5 ? 'red' : 'green')}
+      ${indCell('Trend S/M/L', `${ti.trendShort}/${ti.trendMid}/${ti.trendLong}`)}
+      ${indCell('Trend Consist.', `${ti.trendConsistency}%`, ti.trendConsistency >= 66 ? 'green' : ti.trendConsistency <= 33 ? 'red' : 'amber')}
+      ${indCell('Golden/Death', ti.goldenCrossActive ? '✅ Golden' : ti.deathCrossActive ? '❌ Death' : '—', ti.goldenCrossActive ? 'green' : ti.deathCrossActive ? 'red' : undefined)}
+      ${indCell('Candle', ti.candlestickPattern.replace(/_/g,' '))}
+    </div>
+  </div>
+
+  <!-- Signal Breakdown -->
+  <div style="margin-bottom:14px">
+    <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:6px">
+      ACTIVE SIGNALS — Conviction Score: <span style="color:${rec.signalResult.convictionScore >= 0 ? '#0a6e3c' : '#b83232'}">${rec.signalResult.convictionScore.toFixed(1)}</span>
+    </div>
+    ${rec.signalResult.buySignals.length > 0 ? `
+      <div style="margin-bottom:6px">
+        <div style="font-size:10px;color:#0a6e3c;font-weight:600;margin-bottom:4px">BULLISH SIGNALS (${rec.signalResult.buySignals.length})</div>
+        ${rec.signalResult.buySignals.map(s =>
+          `<div style="font-size:11px;color:#333;padding:3px 0;border-bottom:1px solid #f5f5f5">
+            <span style="background:#e6f9ef;color:#0a6e3c;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-right:6px">${s.name}</span>
+            ${s.description}
+          </div>`
+        ).join('')}
+      </div>` : ''}
+    ${rec.signalResult.sellSignals.length > 0 ? `
+      <div>
+        <div style="font-size:10px;color:#b83232;font-weight:600;margin-bottom:4px">BEARISH SIGNALS (${rec.signalResult.sellSignals.length})</div>
+        ${rec.signalResult.sellSignals.map(s =>
+          `<div style="font-size:11px;color:#333;padding:3px 0;border-bottom:1px solid #f5f5f5">
+            <span style="background:#fde8e8;color:#b83232;padding:1px 6px;border-radius:3px;font-size:10px;font-weight:600;margin-right:6px">${s.name}</span>
+            ${s.description}
+          </div>`
+        ).join('')}
+      </div>` : ''}
+  </div>
+
+  <!-- Fundamentals -->
+  <div style="font-size:11px;font-weight:700;color:#888;text-transform:uppercase;margin-bottom:8px">FUNDAMENTALS</div>
+  <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:6px">
+    ${[
+      ['P/E (TTM)',      `${round(f.peRatioTtm)} vs ${f.sectorAvgPe} sector`],
+      ['P/E (Fwd)',      round(f.peRatioForward)],
+      ['P/B',           round(f.pbRatio)],
+      ['EV/EBITDA',     round(f.evEbitda)],
+      ['EPS TTM',       `PKR ${round(f.epsTtm)}`],
+      ['EPS Growth',    `${round(f.epsGrowthYoy)}% YoY`],
+      ['ROE',           `${round(f.roeTtm)}%`],
+      ['ROIC',          `${round(f.roicTtm)}%`],
+      ['Net Margin',    `${round(f.netProfitMarginPct)}%`],
+      ['Rev Growth',    `${round(f.revenueGrowthYoy)}% YoY`],
+      ['Div Yield',     `${round(f.dividendYieldPct)}%`],
+      ['Div/Share',     `PKR ${round(f.dividendPerShare)}`],
+      ['Div Years',     f.consecutiveDividendYears],
+      ['D/E',           round(f.debtToEquity)],
+      ['Curr Ratio',    round(f.currentRatio)],
+      ['Int Coverage',  `${round(f.interestCoverageRatio)}×`],
+      ['Net Debt/EBITDA', round(f.netDebtToEbitda)],
+      ['FCF Yield',     `${round(f.freeCashFlowYield)}%`],
+      ['Book Value/Sh', `PKR ${round(f.bookValuePerShare)}`],
+    ].map(([l, v]) => `<div style="background:#f7f7f7;border-radius:5px;padding:5px 9px;min-width:100px">
+      <div style="font-size:10px;color:#888">${l}</div>
+      <div style="font-weight:700;font-size:12px">${v}</div>
+    </div>`).join('')}
+  </div>
+  ${f.upcomingDividendDate  ? `<div style="font-size:11px;color:#0a6e3c;margin-top:4px">📅 Dividend ex-date: <strong>${f.upcomingDividendDate}</strong></div>` : ''}
+  ${f.upcomingEarningsDate  ? `<div style="font-size:11px;color:#1a6fb5;margin-top:2px">📅 Earnings: <strong>${f.upcomingEarningsDate}</strong></div>` : ''}
+  ${rec.flags.filter(f => !f.includes('warn')).length > 0
+    ? `<div style="margin-top:6px;font-size:11px;color:#888">Flags: ${rec.flags.join(' · ')}</div>` : ''}
+</div>`;
+}
+
+// ─── Build full HTML ───────────────────────────────────────────────────────────
+
+function buildHtml(output: RunOutput): string {
+  const {
+    runAt, macro: m, portfolioRecs, discoveryPicks,
+    alerts, sectorConcentration, aiReview,
+    totalPortfolioValue, totalCostBasis, totalUnrealisedPl, totalUnrealisedPlPct,
+    circuitBreakerActive,
+  } = output;
+
+  const dateStr    = format(runAt, 'EEEE, d MMMM yyyy — HH:mm');
+  const critAlerts = alerts.filter(a => a.severity === 'CRITICAL');
+
+  const css = `
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#1a1a1a;background:#f2f4f8;padding:20px}
+    .page{max-width:980px;margin:0 auto;background:#fff;border-radius:12px;padding:32px 36px;box-shadow:0 2px 20px rgba(0,0,0,.07)}
+    h2{font-size:13px;font-weight:700;color:#888;text-transform:uppercase;letter-spacing:.6px;margin:28px 0 12px;padding-bottom:6px;border-bottom:2px solid #f0f0f0}
+    table{width:100%;border-collapse:collapse;font-size:12px}
+    th{background:#f5f5f5;padding:8px 10px;text-align:left;font-weight:600;font-size:11px;color:#666;border-bottom:2px solid #e0e0e0;text-transform:uppercase;letter-spacing:.3px}
+    td{padding:9px 10px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
+  `;
 
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<style>
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Arial,sans-serif;color:#1a1a1a;background:#f4f6f9;padding:24px}
-  .page{max-width:960px;margin:0 auto;background:#fff;border-radius:12px;padding:32px;box-shadow:0 2px 16px rgba(0,0,0,.08)}
-  h2{font-size:15px;font-weight:700;color:#1a1a1a;margin:28px 0 12px;padding-bottom:6px;border-bottom:2px solid #f0f0f0;text-transform:uppercase;letter-spacing:.5px}
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th{background:#f5f5f5;padding:9px 10px;text-align:left;font-weight:600;font-size:11px;color:#666;border-bottom:2px solid #e0e0e0;text-transform:uppercase}
-  td{padding:9px 10px;border-bottom:1px solid #f0f0f0;vertical-align:middle}
-  tr:hover td{background:#fafafa}
-</style></head><body>
-<div class="page">
+<html lang="en"><head><meta charset="utf-8"><style>${css}</style></head>
+<body><div class="page">
 
-<!-- Cover -->
-<div style="background:linear-gradient(135deg,#1a1a2e 0%,#16213e 50%,#0f3460 100%);color:#fff;padding:28px 32px;border-radius:10px;margin-bottom:28px">
-  <div style="font-size:26px;font-weight:800;letter-spacing:-0.5px">PSX Portfolio Analysis</div>
-  <div style="opacity:.75;font-size:13px;margin-top:6px">${dateStr} PKT &nbsp;|&nbsp; Shariah: ${output.config.shariahMode} &nbsp;|&nbsp; AI: ${output.config.aiModel.toUpperCase()}</div>
-  <div style="margin-top:20px;display:flex;flex-wrap:wrap;gap:20px">
+<!-- ═══════════════════════════════════════════════════════════════════════
+     COVER
+════════════════════════════════════════════════════════════════════════ -->
+<div style="background:linear-gradient(135deg,#0f1729 0%,#16213e 55%,#1a3a6e 100%);color:#fff;padding:28px 32px;border-radius:10px;margin-bottom:24px">
+  <div style="font-size:28px;font-weight:900;letter-spacing:-0.5px">📊 PSX Portfolio Analysis</div>
+  <div style="opacity:.7;font-size:13px;margin-top:5px">${dateStr} PKT &nbsp;|&nbsp; Shariah: ${output.config.shariahMode} &nbsp;|&nbsp; AI: ${output.config.aiModel.toUpperCase()}</div>
+  <div style="display:flex;flex-wrap:wrap;gap:20px;margin-top:20px">
     ${[
-      ['Portfolio Value', formatPkr(totalPortfolioValue)],
+      ['Total Portfolio', formatPkr(totalPortfolioValue)],
       ['Cost Basis', formatPkr(totalCostBasis)],
-      ['Unrealised P&L', `${formatPct(totalUnrealisedPlPct)} (${formatPkr(totalUnrealisedPl)})`],
+      ['Unrealised P&L', `${formatPct(totalUnrealisedPlPct)} / ${formatPkr(totalUnrealisedPl)}`],
       ['KSE-100', `${m.kse100Level.toLocaleString()} (${formatPct(m.kse100ChangePct)})`],
-      ['PKR/USD', m.pkrUsdOfficial.toString()],
-      ['SBP Rate', `${m.sbpPolicyRate}%`],
-    ].map(([l,v])=>`<div>
-      <div style="font-size:11px;opacity:.65">${l}</div>
-      <div style="font-size:18px;font-weight:700;margin-top:2px">${v}</div>
+      ['PKR/USD', `${m.pkrUsdOfficial} (${m.pkrTrend})`],
+      ['SBP Rate', `${m.sbpPolicyRate}% (${m.sbpRateTrend})`],
+      ['Brent', `$${m.brentCrude}`],
+    ].map(([l, v]) => `<div>
+      <div style="font-size:11px;opacity:.55">${l}</div>
+      <div style="font-size:17px;font-weight:700;margin-top:2px">${v}</div>
     </div>`).join('')}
   </div>
 </div>
 
 ${circuitBreakerActive ? `
-<div style="background:#fff3cd;border:1.5px solid #ffc107;padding:14px 18px;border-radius:8px;margin-bottom:20px;font-weight:600;color:#856404">
-  ⚠️ CIRCUIT BREAKER ACTIVE — KSE-100 down ${Math.abs(m.kse100ChangePct)}% today. All BUY signals paused until market stabilises.
+<div style="background:#fff3cd;border:1.5px solid #ffc107;padding:14px 18px;border-radius:8px;margin-bottom:18px;font-weight:600;color:#6a4d00;font-size:14px">
+  ⚠️ CIRCUIT BREAKER ACTIVE — KSE-100 is down ${Math.abs(m.kse100ChangePct)}% today.
+  All BUY recommendations are paused until the market stabilises.
 </div>` : ''}
 
-<!-- Market Stance -->
-<h2>AI Market Assessment</h2>
-<div style="display:flex;align-items:flex-start;gap:20px;padding:16px;background:#f9f9ff;border-radius:10px;margin-bottom:20px">
-  <div style="text-align:center;min-width:100px">
-    <div style="font-size:13px;color:#888;margin-bottom:4px">Stance</div>
-    <div style="font-size:18px;font-weight:800;color:${STANCE_COLOR[aiReview.marketStance] ?? '#555'};text-transform:uppercase">${aiReview.marketStance}</div>
-    <div style="font-size:12px;color:#888;margin-top:4px">AI Score: ${aiReview.algorithmScore}/10</div>
+<!-- ═══════════════════════════════════════════════════════════════════════
+     CRITICAL ALERTS (shown at top if any)
+════════════════════════════════════════════════════════════════════════ -->
+${critAlerts.length > 0 ? `
+<h2>🚨 Critical Alerts (${critAlerts.length})</h2>
+<div style="margin-bottom:20px">
+${critAlerts.map(a => `
+  <div style="padding:12px 16px;margin:6px 0;border-left:4px solid ${SEV_COLOR[a.severity]};background:#fafafa;border-radius:0 8px 8px 0">
+    <div style="font-weight:700;color:${SEV_COLOR[a.severity]};font-size:14px">${a.ticker} — ${a.type.replace(/_/g,' ')}</div>
+    <div style="font-size:13px;color:#444;margin-top:3px">${a.detail}</div>
+    <div style="font-size:12px;color:#1a6fb5;margin-top:4px;font-weight:600">→ Action: ${a.action}</div>
+  </div>`).join('')}
+</div>` : ''}
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     AI MARKET OVERVIEW
+════════════════════════════════════════════════════════════════════════ -->
+<h2>AI Market Overview</h2>
+<div style="display:flex;gap:20px;align-items:flex-start;padding:16px;background:#f9f9ff;border-radius:10px;margin-bottom:20px;flex-wrap:wrap">
+  <div style="text-align:center;min-width:90px">
+    <div style="font-size:11px;color:#888;margin-bottom:4px">Stance</div>
+    <div style="font-size:20px;font-weight:900;color:${STANCE_COLOR[aiReview.marketStance] ?? '#555'};text-transform:uppercase">${aiReview.marketStance}</div>
+    <div style="font-size:11px;color:#888;margin-top:4px">AI Score: ${aiReview.algorithmScore}/10</div>
   </div>
-  <div style="flex:1">
-    <p style="font-size:14px;line-height:1.7;color:#333">${aiReview.marketSummary}</p>
-    ${aiReview.keyMarketDrivers.length ? `<div style="margin-top:8px;font-size:12px;color:#555"><strong>Key Drivers:</strong> ${aiReview.keyMarketDrivers.join(' · ')}</div>` : ''}
-    ${aiReview.globalRiskFlags.length ? `<div style="margin-top:6px;font-size:12px;color:#c0392b"><strong>Risk Flags:</strong> ${aiReview.globalRiskFlags.join(' · ')}</div>` : ''}
+  <div style="flex:1;min-width:220px">
+    <div style="font-size:14px;line-height:1.7;color:#333">${aiReview.marketSummary}</div>
+    ${aiReview.keyMarketDrivers.length > 0 ? `
+      <div style="margin-top:8px;font-size:12px;color:#555">
+        <strong>Key Drivers:</strong> ${aiReview.keyMarketDrivers.join(' · ')}
+      </div>` : ''}
+    ${aiReview.globalRiskFlags.length > 0 ? `
+      <div style="margin-top:6px;font-size:12px;color:#b83232">
+        <strong>⚠ Risk Flags:</strong> ${aiReview.globalRiskFlags.join(' · ')}
+      </div>` : ''}
+    ${aiReview.macroOpportunities.length > 0 ? `
+      <div style="margin-top:6px;font-size:12px;color:#0a6e3c">
+        <strong>✅ Opportunities:</strong> ${aiReview.macroOpportunities.join(' · ')}
+      </div>` : ''}
   </div>
 </div>
 
 <!-- Macro Snapshot -->
-<h2>Macro Snapshot</h2>
-<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:20px;font-size:13px">
+<div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px;font-size:12px">
 ${[
-  ['PKR/USD Official',m.pkrUsdOfficial,m.pkrTrend],
-  ['SBP Policy Rate',`${m.sbpPolicyRate}%`,m.sbpRateTrend],
-  ['KIBOR 1M',`${m.kibor1m}%`,''],
-  ['Pakistan CPI',`${m.pakistanCpi}%`,''],
-  ['Brent Crude',`$${m.brentCrude}`,''],
-  ['Urea',`$${m.ureaTonne}/t`,''],
-  ['KSE-100 YTD',`${formatPct(m.kse100Ytd)}`,''],
-  ['FPI Weekly',`PKR ${m.fpiWeeklyMillion}M`,m.fpiDirection],
-].map(([l,v,sub])=>`<div style="background:#f5f5f5;padding:10px 14px;border-radius:8px;min-width:140px">
-  <div style="font-size:11px;color:#888">${l}</div>
-  <div style="font-weight:700;font-size:15px;margin-top:2px">${v}</div>
-  ${sub?`<div style="font-size:10px;color:#aaa">${sub}</div>`:''}
+  ['PKR/USD', m.pkrUsdOfficial, m.pkrTrend],
+  ['SBP Rate', `${m.sbpPolicyRate}%`, m.sbpRateTrend],
+  ['KIBOR 1M', `${m.kibor1m}%`, ''],
+  ['CPI', `${m.pakistanCpi}%`, ''],
+  ['Core CPI', `${m.coreCpi}%`, ''],
+  ['Brent', `$${m.brentCrude}`, ''],
+  ['Urea', `$${m.ureaTonne}/t`, ''],
+  ['KSE YTD', formatPct(m.kse100Ytd), ''],
+  ['FPI/wk', `PKR ${m.fpiWeeklyMillion}M`, m.fpiDirection],
+].map(([l, v, sub]) => `<div style="background:#f5f5f5;padding:9px 13px;border-radius:8px;min-width:110px">
+  <div style="font-size:10px;color:#888">${l}</div>
+  <div style="font-weight:700;font-size:14px;margin-top:1px">${v}</div>
+  ${sub ? `<div style="font-size:10px;color:#aaa">${sub}</div>` : ''}
 </div>`).join('')}
 </div>
-<div style="font-size:12px;padding:10px 14px;background:#f9f9f9;border-radius:8px;color:#555;margin-bottom:8px">IMF: ${m.imfStatus}</div>
+<div style="padding:10px 14px;background:#f5f5f5;border-radius:8px;font-size:12px;color:#555;margin-bottom:6px">
+  <strong>IMF:</strong> ${m.imfStatus}
+</div>
 
-<!-- Active Alerts -->
-${alerts.length > 0 ? `
-<h2>Active Alerts (${alerts.length})</h2>
-<div style="margin-bottom:20px">
-${alerts.map(a=>`
-  <div style="padding:12px 16px;margin:6px 0;border-left:4px solid ${SEV_COLOR[a.severity]};background:#fafafa;border-radius:0 8px 8px 0">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <div>
-        <strong style="color:${SEV_COLOR[a.severity]}">[${a.severity}]</strong>
-        <strong style="margin-left:6px">${a.ticker}</strong>
-        <span style="color:#888;font-size:12px;margin-left:6px">${a.type.replace(/_/g,' ')}</span>
-      </div>
-    </div>
-    <div style="font-size:13px;color:#444;margin-top:4px">${a.detail}</div>
-    <div style="font-size:12px;color:#2980b9;margin-top:3px">→ ${a.action}</div>
-  </div>`).join('')}
-</div>` : ''}
-
-<!-- Portfolio Summary Table -->
-<h2>Portfolio Holdings</h2>
-<div style="overflow-x:auto;margin-bottom:12px">
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PORTFOLIO SUMMARY TABLE
+════════════════════════════════════════════════════════════════════════ -->
+<h2>Portfolio Summary</h2>
+<div style="overflow-x:auto;margin-bottom:20px">
 <table>
   <thead><tr>
     <th>Ticker</th><th>Name</th><th>Shares</th><th>Avg Cost</th>
     <th>Price</th><th>P&L%</th><th>P&L PKR</th>
     <th>Signal</th><th>Buy At</th><th>Target 1</th><th>Stop Loss</th>
-    <th>Score</th><th>AI</th>
+    <th>Score</th>
   </tr></thead>
   <tbody>
   ${portfolioRecs.map(r => {
-    const ai = aiReview.portfolioReview.find(x=>x.ticker===r.ticker);
-    const pos = r.position;
-    const plColor = (pos?.unrealisedPlPct ?? 0) >= 0 ? '#0a6e3c' : '#c0392b';
+    const p = r.position;
+    const pc = p ? plColor(p.unrealisedPlPct) : '#333';
     return `<tr>
       <td><strong>${r.ticker}</strong></td>
-      <td style="font-size:12px;color:#555">${r.name}</td>
-      <td>${pos?.shares.toLocaleString() ?? '—'}</td>
-      <td>${pos ? `PKR ${pos.avgCost}` : '—'}</td>
-      <td><strong>PKR ${r.currentPrice}</strong></td>
-      <td style="color:${plColor}">${pos ? formatPct(pos.unrealisedPlPct) : '—'}</td>
-      <td style="color:${plColor}">${pos ? formatPkr(pos.unrealisedPlPkr) : '—'}</td>
+      <td style="font-size:11px;color:#555">${r.name}</td>
+      <td>${p?.shares.toLocaleString() ?? '—'}</td>
+      <td>${p ? `PKR ${p.avgCost}` : '—'}</td>
+      <td><strong>PKR ${r.currentPrice}</strong> <span style="font-size:10px;color:${plColor(r.dayChangePct)}">${formatPct(r.dayChangePct)}</span></td>
+      <td style="color:${pc};font-weight:600">${p ? formatPct(p.unrealisedPlPct) : '—'}</td>
+      <td style="color:${pc}">${p ? formatPkr(p.unrealisedPlPkr) : '—'}</td>
       <td>${badge(r.signal)}</td>
-      <td style="font-size:12px">PKR ${r.priceTargets.aggressiveBuyAt}</td>
-      <td style="font-size:12px;color:#2d8a4e">PKR ${r.priceTargets.target1}</td>
-      <td style="font-size:12px;color:#c0392b">PKR ${r.priceTargets.stopLoss}</td>
-      <td>${scoreBar(r.compositeScore.composite)}</td>
-      <td style="font-size:12px">${ai?.confidence ?? '—'}</td>
+      <td style="color:#0a6e3c;font-weight:600">PKR ${r.priceTargets.aggressiveBuyAt}</td>
+      <td style="color:#0a6e3c">PKR ${r.priceTargets.target1}</td>
+      <td style="color:#b83232">PKR ${r.priceTargets.stopLoss}</td>
+      <td>${scoreBar('', r.compositeScore.composite, '80px')}</td>
     </tr>`;
   }).join('')}
   </tbody>
 </table>
 </div>
 
-<!-- Sector Concentration -->
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTOR CONCENTRATION
+════════════════════════════════════════════════════════════════════════ -->
 <h2>Sector Concentration</h2>
-<div style="display:flex;flex-wrap:wrap;gap:16px;margin-bottom:24px">
-${Object.entries(sectorConcentration).sort(([,a],[,b])=>b-a).map(([s,p])=>{
-  const c=p>35?'#c0392b':p>25?'#e67e22':'#2d8a4e';
-  return `<div style="min-width:160px">
-    <div style="display:flex;justify-content:space-between;font-size:13px;margin-bottom:3px">
+<div style="display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px">
+${Object.entries(sectorConcentration).sort(([,a],[,b]) => b - a).map(([s, p]) => {
+  const c = p > 35 ? '#b83232' : p > 25 ? '#c97a00' : '#0a6e3c';
+  return `<div style="min-width:150px">
+    <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
       <span>${s}</span><strong style="color:${c}">${p}%</strong>
     </div>
     <div style="height:8px;background:#eee;border-radius:4px">
@@ -339,22 +487,54 @@ ${Object.entries(sectorConcentration).sort(([,a],[,b])=>b-a).map(([s,p])=>{
     </div>
   </div>`;}).join('')}
 </div>
-${aiReview.concentrationRisks.length?`<div style="font-size:12px;color:#c0392b;margin-bottom:4px">${aiReview.concentrationRisks.map(r=>`⚠ ${r}`).join('<br>')}</div>`:''}
+${aiReview.concentrationRisks.length > 0 ? `
+  <div style="font-size:12px;color:#b83232;margin-bottom:20px">${aiReview.concentrationRisks.map(r=>`⚠ ${r}`).join('<br>')}</div>` : ''}
 
-<!-- Detailed Portfolio Analysis -->
-<h2>Detailed Portfolio Analysis</h2>
-${portfolioRecs.map(r => stockCard(r, aiReview, true)).join('')}
+<!-- ═══════════════════════════════════════════════════════════════════════
+     ALL ALERTS
+════════════════════════════════════════════════════════════════════════ -->
+${alerts.length > 0 ? `
+<h2>All Active Alerts (${alerts.length})</h2>
+<div style="margin-bottom:20px">
+${alerts.map(a => `
+  <div style="padding:10px 14px;margin:5px 0;border-left:4px solid ${SEV_COLOR[a.severity]};background:#fafafa;border-radius:0 8px 8px 0">
+    <span style="font-size:11px;font-weight:700;color:${SEV_COLOR[a.severity]}">[${a.severity}]</span>
+    <strong style="margin-left:6px">${a.ticker}</strong>
+    <span style="font-size:11px;color:#888;margin-left:4px">${a.type.replace(/_/g,' ')}</span>
+    <div style="font-size:12px;color:#444;margin-top:2px">${a.detail}</div>
+    <div style="font-size:11px;color:#1a6fb5;margin-top:2px">→ ${a.action}</div>
+  </div>`).join('')}
+</div>` : ''}
 
-<!-- Discovery Picks -->
-${discoveryPicks.length ? `
-<h2>Discovery Picks — New Buy Candidates</h2>
-${discoveryPicks.map(r => stockCard(r, aiReview, false)).join('')}` : ''}
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PORTFOLIO — NOOB SECTION
+════════════════════════════════════════════════════════════════════════ -->
+<h2>📖 Portfolio — What Should You Do? (Plain English)</h2>
+<p style="font-size:12px;color:#888;margin-bottom:14px">Each card below tells you exactly what to do with this stock, at what price to buy, take profit, and exit.</p>
+${portfolioRecs.map(r => noobCard(r, aiReview)).join('')}
 
-<!-- Sector Outlook -->
-${Object.keys(aiReview.sectorOutlook).length ? `
+<!-- ═══════════════════════════════════════════════════════════════════════
+     PORTFOLIO — PRO SECTION
+════════════════════════════════════════════════════════════════════════ -->
+<h2>🔬 Portfolio — Detailed Technical & Fundamental Analysis (Professional)</h2>
+${portfolioRecs.map(r => proPanel(r)).join('')}
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     DISCOVERY PICKS
+════════════════════════════════════════════════════════════════════════ -->
+${discoveryPicks.length > 0 ? `
+<h2>🔍 New Buy Candidates (Outside Portfolio)</h2>
+<p style="font-size:12px;color:#888;margin-bottom:14px">Stocks not currently in your portfolio that the algorithm and AI both rate highly.</p>
+${discoveryPicks.map(r => noobCard(r, aiReview)).join('')}
+${discoveryPicks.map(r => proPanel(r)).join('')}` : ''}
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     SECTOR OUTLOOK
+════════════════════════════════════════════════════════════════════════ -->
+${Object.keys(aiReview.sectorOutlook).length > 0 ? `
 <h2>Sector Outlook (AI)</h2>
-<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px">
-${Object.entries(aiReview.sectorOutlook).map(([s,v])=>`
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:24px">
+${Object.entries(aiReview.sectorOutlook).map(([s, v]) => `
   <div style="padding:12px 14px;background:#f9f9f9;border-radius:8px">
     <div style="font-weight:700;font-size:13px;margin-bottom:4px">${s}</div>
     <div style="font-size:12px;color:#555;line-height:1.5">${v}</div>
@@ -362,11 +542,11 @@ ${Object.entries(aiReview.sectorOutlook).map(([s,v])=>`
 </div>` : ''}
 
 <!-- Disclaimer -->
-<div style="margin-top:32px;padding:14px;background:#f9f9f9;border-radius:8px;font-size:11px;color:#888;line-height:1.7">
+<div style="margin-top:32px;padding:14px;background:#f9f9f9;border-radius:8px;font-size:10px;color:#888;line-height:1.7">
   <strong>Disclaimer:</strong> This report is generated by an automated system for informational purposes only.
-  It does not constitute financial advice. Always conduct your own due diligence before making investment decisions.
+  It does not constitute financial advice. Always conduct your own due diligence before investing.
   Past performance does not guarantee future results. Investing in equities involves risk of capital loss.
-  &nbsp;|&nbsp; Generated: ${dateStr} PKT &nbsp;|&nbsp; Run ID: ${output.runId}
+  &nbsp;|&nbsp; ${dateStr} PKT &nbsp;|&nbsp; Run: ${output.runId}
 </div>
 
 </div></body></html>`;
@@ -375,7 +555,7 @@ ${Object.entries(aiReview.sectorOutlook).map(([s,v])=>`
 // ─── Export ───────────────────────────────────────────────────────────────────
 
 export async function generatePdfReport(output: RunOutput): Promise<Buffer> {
-  logger.info('Building PDF report');
+  logger.info('Generating PDF report');
   const html = buildHtml(output);
 
   const browser = await puppeteer.launch({
@@ -386,13 +566,14 @@ export async function generatePdfReport(output: RunOutput): Promise<Buffer> {
   try {
     const page = await browser.newPage();
     await page.setContent(html, { waitUntil: 'networkidle0' });
-    const pdfBuffer = await page.pdf({
+    const pdf = await page.pdf({
       format: 'A4',
       printBackground: true,
-      margin: { top: '16mm', bottom: '16mm', left: '12mm', right: '12mm' },
+      margin: { top: '14mm', bottom: '14mm', left: '10mm', right: '10mm' },
     });
-    logger.info({ bytes: pdfBuffer.length }, 'PDF generated');
-    return Buffer.from(pdfBuffer);
+    const buf = Buffer.from(pdf);
+    logger.info({ bytes: buf.length }, 'PDF generated');
+    return buf;
   } finally {
     await browser.close();
   }

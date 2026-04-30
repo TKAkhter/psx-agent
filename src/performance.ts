@@ -1,25 +1,15 @@
 import { round2 } from "./indicators";
-import { TradeSignalMap } from "./signals";
-import { StockDataMap, StockData } from "./fetch-data";
-import { PortfolioSummary } from "./signals";
+import type {
+  TradeSignalMap,
+  PortfolioSummary,
+  PerformanceResult,
+  BreakdownEntry,
+  StockDataMap,
+  StockData,
+} from "./types";
 import * as db from "./db";
 
-export interface BreakdownEntry {
-  symbol: string;
-  action: string;
-  prevPrice: number;
-  currPrice: number;
-  delta: number;
-  correct: boolean;
-}
-
-export interface PerformanceResult {
-  accuracy: number;
-  correct: number;
-  total: number;
-  breakdown: BreakdownEntry[];
-  sessionDate: Date;
-}
+export type { PerformanceResult };
 
 interface SavedSession {
   createdAt: Date;
@@ -50,7 +40,6 @@ export async function evaluatePerformance(
       const prevSig = prev.signals?.[sym];
       const prevSnap = prev.snapshot?.[sym];
       if (!prevSig || !prevSnap?.price) continue;
-
       total++;
       const delta = round2(
         ((curr.price - prevSnap.price) / prevSnap.price) * 100
@@ -73,7 +62,6 @@ export async function evaluatePerformance(
         correct: ok,
       });
     }
-
     if (!total) return null;
     return {
       accuracy: round2((correct / total) * 100)!,
@@ -107,16 +95,14 @@ export async function saveSession(
       unrealizedPct: sd.unrealizedPct,
     };
   }
-
   const signalMap: Record<string, { action: string }> = {};
   for (const [sym, s] of Object.entries(signals))
     signalMap[sym] = { action: s.action };
-
   await db.insertOne("signals", {
     createdAt: new Date(),
     signals: signalMap,
     summary,
-    geminiStance: geminiStance ?? null,
+    geminiStance,
     snapshot,
   });
 }

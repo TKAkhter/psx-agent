@@ -1,28 +1,31 @@
 {
   "name": "psx-agent",
-  "version": "4.0.0",
-  "description": "PSX Trading Agent — TypeScript, PSXTerminal, Gemini AI, Meta WhatsApp",
+  "version": "5.0.0",
+  "description": "PSX Trading Agent — TypeScript, PSXTerminal, Gemini AI, Green API WhatsApp, PDF Reports",
   "main": "dist/index.js",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
     "dev": "ts-node src/index.ts",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist reports"
   },
   "author": "",
   "license": "ISC",
   "dependencies": {
     "axios": "^1.7.9",
     "dotenv": "^17.4.1",
+    "form-data": "^4.0.1",
     "moment-timezone": "^0.6.1",
     "mongodb": "^6.21.0",
     "nodemailer": "^8.0.5",
+    "pdfkit": "^0.15.1",
     "yahoo-finance2": "^3.14.0"
   },
   "devDependencies": {
     "@types/moment-timezone": "^0.5.30",
     "@types/node": "^22.10.0",
     "@types/nodemailer": "^6.4.17",
+    "@types/pdfkit": "^0.13.9",
     "ts-node": "^10.9.2",
     "typescript": "^5.7.2"
   }

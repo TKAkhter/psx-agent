@@ -1,10 +1,6 @@
 import { MongoClient, Db, Filter, FindOptions, Document } from "mongodb";
 import { ENV } from "./config";
 
-// ─────────────────────────────────────────────────────────────
-//  SINGLETON
-// ─────────────────────────────────────────────────────────────
-
 let mongoClient: MongoClient | null = null;
 let mongoDB: Db | null = null;
 
@@ -29,10 +25,6 @@ export async function closeDB(): Promise<void> {
     mongoDB = null;
   }
 }
-
-// ─────────────────────────────────────────────────────────────
-//  HELPERS
-// ─────────────────────────────────────────────────────────────
 
 export async function insertOne(
   collection: string,

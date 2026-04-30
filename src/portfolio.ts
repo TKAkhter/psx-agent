@@ -1,26 +1,14 @@
-import { ENV, DEFAULT_PORTFOLIO, PortfolioEntry } from "./config";
+import { ENV, DEFAULT_PORTFOLIO } from "./config";
+import type { PortfolioEntry, PositionInfo, PortfolioMap } from "./types";
 import * as db from "./db";
+
+export type { PortfolioEntry, PositionInfo, PortfolioMap };
 
 const COLLECTION = "portfolio";
 const PORTFOLIO_TYPE = ENV.PORTFOLIO_TYPE;
 
-export interface PositionInfo {
-  symbol: string;
-  name: string;
-  sector: string;
-  shares: number;
-  avgCost: number;
-}
-
-export type PortfolioMap = Record<string, PositionInfo>;
-
-// ─────────────────────────────────────────────────────────────
-//  LOAD (or seed) portfolio from MongoDB
-// ─────────────────────────────────────────────────────────────
-
 export async function loadPortfolio(): Promise<PortfolioEntry[]> {
   const count = await db.countDocs(COLLECTION, { type: PORTFOLIO_TYPE });
-
   if (count === 0) {
     console.log(
       `  ℹ  Portfolio empty (type=${PORTFOLIO_TYPE}) — seeding defaults...`
@@ -35,7 +23,6 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
     await db.insertMany(COLLECTION, docs);
     console.log(`  ✓  Seeded ${docs.length} positions`);
   }
-
   const positions = await db.findMany<PortfolioEntry>(COLLECTION, {
     active: { $ne: false },
     type: PORTFOLIO_TYPE,
@@ -45,10 +32,6 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
   );
   return positions;
 }
-
-// ─────────────────────────────────────────────────────────────
-//  Build lookup map  { "MEBL": PositionInfo }
-// ─────────────────────────────────────────────────────────────
 
 export function buildPortfolioMap(positions: PortfolioEntry[]): PortfolioMap {
   const map: PortfolioMap = {};

@@ -5,11 +5,11 @@ import { fetchAllStocks } from "./fetch-data";
 import { getSignals, calcPortfolioSummary, TradeSignalMap } from "./signals";
 import { getGeminiInsight } from "./gemini";
 import { evaluatePerformance, saveSession } from "./performance";
-import { buildHtmlEmail } from "./templates/email-template";
-import { buildWhatsAppMessage } from "./templates/whatsapp-template";
+import { generatePdfReport, getPdfPath } from "./pdf-generator";
 import { sendEmail } from "./notify/email";
-import { sendWhatsApp } from "./notify/whatsapp";
+import { sendWhatsAppPdf, sendWhatsAppText } from "./notify/whatsapp";
 import { ENV } from "./config";
+import type { TradeSignal, ReportData } from "./types";
 
 // ─────────────────────────────────────────────────────────────
 //  TIME
@@ -34,18 +34,68 @@ const step = (n: number, label: string) =>
 const head = (label: string) => console.log(`\n${LINE}\n  ${label}\n${LINE}`);
 
 // ─────────────────────────────────────────────────────────────
+//  WHATSAPP SUMMARY  (brief text sent before PDF)
+// ─────────────────────────────────────────────────────────────
+
+function buildWhatsAppSummary(
+  signals: TradeSignalMap,
+  summary: ReturnType<typeof calcPortfolioSummary>,
+  timeStamp: string
+): string {
+  const sgn = (n: number | null | undefined) =>
+    n == null ? "" : n >= 0 ? "+" : "";
+  const pnlUp = (summary.totalPnl ?? 0) >= 0;
+  const counts: Record<string, number> = {
+    STRONG_BUY: 0,
+    BUY: 0,
+    HOLD: 0,
+    SELL: 0,
+    STRONG_SELL: 0,
+  };
+  for (const s of Object.values(signals))
+    if (s.action in counts) counts[s.action]++;
+
+  let msg = `🇵🇰 *PSX TRADING REPORT*\n📅 ${timeStamp}\n${"━".repeat(34)}\n\n`;
+  msg += `${pnlUp ? "📈" : "📉"} *PORTFOLIO*\n`;
+  msg += `  Value:    PKR ${(summary.totalValue ?? 0).toLocaleString()}\n`;
+  msg += `  P&L:      ${pnlUp ? "+" : ""}PKR ${(
+    summary.totalPnl ?? 0
+  ).toLocaleString()} (${sgn(summary.totalPnlPct)}${
+    summary.totalPnlPct ?? 0
+  }%)\n\n`;
+  msg += `📊 *SIGNALS*\n`;
+  if (counts.STRONG_BUY) msg += `  📗📗 STRONG BUY: ${counts.STRONG_BUY}\n`;
+  if (counts.BUY) msg += `  📗  BUY:         ${counts.BUY}\n`;
+  if (counts.HOLD) msg += `  ⏸   HOLD:        ${counts.HOLD}\n`;
+  if (counts.SELL) msg += `  📕  SELL:         ${counts.SELL}\n`;
+  if (counts.STRONG_SELL) msg += `  📕📕 STRONG SELL: ${counts.STRONG_SELL}\n`;
+  msg += `\n`;
+
+  // Brief per-signal one-liners
+  for (const [sym, s] of Object.entries(signals)) {
+    if (s.action === "SKIP" || s.action === "HOLD") continue;
+    const ts = s as TradeSignal;
+    msg += `  • *${sym}* ${ts.action.replace("_", " ")} — ${ts.instruction}\n`;
+    msg += `    Target: PKR ${ts.targetPrice}  Stop: PKR ${ts.stopLoss}  R/R 1:${ts.rrRatio}\n`;
+    msg += `    RSI:${ts.rsi14}  MFI:${ts.mfi}  ST:${
+      ts.superTrend?.signal ?? "—"
+    }  ${ts.trend}\n\n`;
+  }
+
+  msg += `📎 *Full report attached as PDF.*\n`;
+  msg += `${"━".repeat(34)}\n_Algo signals + AI — not financial advice_`;
+  return msg;
+}
+
+// ─────────────────────────────────────────────────────────────
 //  CONSOLE SIGNAL SUMMARY
 // ─────────────────────────────────────────────────────────────
 
 function printSummary(
   signals: TradeSignalMap,
-  summary: ReturnType<typeof calcPortfolioSummary>,
-  gemini: Awaited<ReturnType<typeof getGeminiInsight>>
+  summary: ReturnType<typeof calcPortfolioSummary>
 ): void {
-  const a = gemini?.analysis;
-  const m = gemini?.market;
   head("SIGNAL SUMMARY");
-
   const ICONS: Record<string, string> = {
     STRONG_BUY: "🟢🟢",
     BUY: "🟢  ",
@@ -54,37 +104,30 @@ function printSummary(
     STRONG_SELL: "🔴🔴",
     SKIP: "⚫  ",
   };
-
   for (const [sym, s] of Object.entries(signals)) {
     if (s.action === "SKIP") continue;
-    const icon = ICONS[s.action] ?? "•  ";
+    const ts = s as TradeSignal;
+    const icon = ICONS[ts.action] ?? "•  ";
     const chg =
-      s.changePct != null
-        ? ` (${s.changePct >= 0 ? "+" : ""}${s.changePct}%)`
+      ts.changePct != null
+        ? ` (${ts.changePct >= 0 ? "+" : ""}${ts.changePct}%)`
         : "";
-    const st = s.superTrend
-      ? ` ST:${s.superTrend.signal}@${s.superTrend.value}`
-      : "";
+    const st = ts.superTrend ? ` ST:${ts.superTrend.signal}` : "";
     console.log(
-      `\n${icon} ${sym.padEnd(8)} PKR ${String(s.price).padStart(8)}${chg}  [${
-        s.action
-      }] ${s.confidence}`
+      `\n${icon} ${sym.padEnd(8)} PKR ${String(ts.price).padStart(8)}${chg}  [${
+        ts.action
+      }] ${ts.confidence}`
     );
-    console.log(`         ${s.instruction}`);
-    if (s.action !== "HOLD") {
+    console.log(`         ${ts.instruction}`);
+    if (ts.action !== "HOLD") {
       console.log(
-        `         Target:${s.targetPrice}  Stop:${s.stopLoss}  R/R 1:${s.rrRatio}`
+        `         Target:${ts.targetPrice}  Stop:${ts.stopLoss}  R/R 1:${ts.rrRatio}`
       );
       console.log(
-        `         RSI:${s.rsi14}  MFI:${s.mfi}  ROC:${s.roc}%${st}  ${s.trend}  ADX:${s.adx?.adx}(${s.adx?.strength})`
-      );
-    } else {
-      console.log(
-        `         RSI:${s.rsi14}  MFI:${s.mfi}  ROC:${s.roc}%${st}  ${s.trend}`
+        `         RSI:${ts.rsi14}  MFI:${ts.mfi}  ROC:${ts.roc}%${st}  Regime:${ts.marketRegime}`
       );
     }
   }
-
   console.log(`\n${DASH}`);
   const sign = (summary.totalPnlPct ?? 0) >= 0 ? "+" : "";
   console.log(
@@ -95,13 +138,6 @@ function printSummary(
   console.log(
     `  Market Value  : PKR ${(summary.totalValue ?? 0).toLocaleString()}`
   );
-  if (a?.overall_stance)
-    console.log(`  Gemini Stance : ${a.overall_stance} (${a.emotional_state})`);
-  if (a?.top_trade_today) console.log(`  Top Trade     : ${a.top_trade_today}`);
-  if (m?.global?.oil_brent_usd)
-    console.log(
-      `  Oil / PKR-USD : $${m.global.oil_brent_usd}  /  ${m.global.usd_pkr}`
-    );
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -114,11 +150,10 @@ async function main(): Promise<void> {
   const sessionHour = pktNow.hour() + pktNow.minute() / 60;
 
   head(
-    `PSX Agent  ·  ${stampPKT()}  ·  Type:${ENV.PORTFOLIO_TYPE}  ·  Theme:${
+    `PSX Agent v5  ·  ${stampPKT()}  ·  Type:${ENV.PORTFOLIO_TYPE}  ·  Theme:${
       ENV.EMAIL_THEME
     }`
   );
-
   if (isWeekend()) {
     console.log("\n  🏖  Market closed (weekend)\n");
     process.exit(0);
@@ -174,9 +209,8 @@ async function main(): Promise<void> {
   const signals = getSignals(stockData);
   const summary = calcPortfolioSummary(stockData);
   const counts = { STRONG_BUY: 0, BUY: 0, HOLD: 0, SELL: 0, STRONG_SELL: 0 };
-  for (const s of Object.values(signals)) {
+  for (const s of Object.values(signals))
     if (s.action in counts) counts[s.action as keyof typeof counts]++;
-  }
   console.log(
     `  STRONG_BUY:${counts.STRONG_BUY}  BUY:${counts.BUY}  HOLD:${counts.HOLD}  SELL:${counts.SELL}  STRONG_SELL:${counts.STRONG_SELL}`
   );
@@ -218,54 +252,65 @@ async function main(): Promise<void> {
   );
   console.log(
     gemini?.market
-      ? "  ✓ Phase 1 (market intel + search)"
+      ? "  ✓ Phase 1 (market intel + Search)"
       : "  ⚠ Phase 1 failed"
   );
   console.log(
     gemini?.analysis
-      ? "  ✓ Phase 2 (signal validation + coaching)"
+      ? "  ✓ Phase 2 (validation + coaching)"
       : "  ⚠ Phase 2 failed"
   );
   if (isFirstSession)
     console.log(
-      gemini?.weekly
-        ? "  ✓ Phase 3 (weekly strategic review)"
-        : "  ⚠ Phase 3 failed"
+      gemini?.weekly ? "  ✓ Phase 3 (weekly review)" : "  ⚠ Phase 3 failed"
     );
 
-  // ── 7. Build & Send ───────────────────────────────────────
-  step(7, "Building & sending");
-  const htmlEmail = buildHtmlEmail(
+  // ── 7. Generate PDF & Send ────────────────────────────────
+  step(7, "Generating PDF & sending notifications");
+  const reportData: ReportData = {
     stockData,
     signals,
     summary,
     performance,
     gemini,
-    timeStamp
-  );
-  const waMsg = buildWhatsAppMessage(
-    stockData,
-    signals,
-    summary,
-    gemini,
-    performance,
-    timeStamp
-  );
+    timeStamp,
+    sessionHour,
+  };
+  const pdfPath = getPdfPath(timeStamp);
 
+  try {
+    console.log(`  Generating PDF → ${pdfPath}`);
+    await generatePdfReport(reportData, pdfPath);
+    console.log(
+      `  ✓ PDF generated (${Math.round(
+        require("fs").statSync(pdfPath).size / 1024
+      )}KB)`
+    );
+  } catch (err) {
+    console.error(`  ✗ PDF generation failed: ${(err as Error).message}`);
+  }
+
+  // Build WhatsApp text summary (sent before PDF)
+  const waText = buildWhatsAppSummary(signals, summary, timeStamp);
   const totalBuys = counts.STRONG_BUY + counts.BUY;
   const totalSells = counts.SELL + counts.STRONG_SELL;
   const pnlSign = (summary.totalPnlPct ?? 0) >= 0 ? "+" : "";
   const subject = `PSX ${timeStamp} · ${totalBuys}B/${totalSells}S · P&L ${pnlSign}${summary.totalPnlPct}%`;
 
-  const [emailRes, waRes] = await Promise.allSettled([
-    sendEmail(subject, htmlEmail, waMsg),
-    sendWhatsApp(waMsg),
+  // Send email (PDF attached) + WhatsApp (text summary then PDF)
+  const [emailRes, waTextRes, waPdfRes] = await Promise.allSettled([
+    sendEmail(subject, waText, pdfPath),
+    sendWhatsAppText(waText),
+    sendWhatsAppPdf(pdfPath, `PSX Report ${timeStamp}`),
   ]);
   if (emailRes.status === "rejected")
-    console.error(`  ✗ Email: ${(emailRes.reason as Error).message}`);
-  if (waRes.status === "rejected")
-    console.error(`  ✗ WhatsApp: ${(waRes.reason as Error).message}`);
+    console.error(`  ✗ Email:      ${(emailRes.reason as Error).message}`);
+  if (waTextRes.status === "rejected")
+    console.error(`  ✗ WA text:   ${(waTextRes.reason as Error).message}`);
+  if (waPdfRes.status === "rejected")
+    console.error(`  ✗ WA PDF:    ${(waPdfRes.reason as Error).message}`);
 
+  // Save session
   try {
     await saveSession(
       signals,
@@ -275,13 +320,16 @@ async function main(): Promise<void> {
     );
     console.log("  ✓ Session saved to MongoDB");
   } catch (err) {
-    console.warn(`  ⚠ Save failed: ${(err as Error).message}`);
+    console.warn(`  ⚠ Save: ${(err as Error).message}`);
   }
 
-  printSummary(signals, summary, gemini);
-
-  const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-  console.log(`\n  ✓ Done in ${elapsed}s  ·  ${stampPKT()}`);
+  printSummary(signals, summary);
+  console.log(
+    `\n  ✓ Done in ${((Date.now() - startMs) / 1000).toFixed(
+      1
+    )}s  ·  ${stampPKT()}`
+  );
+  console.log(`  📄 Report: ${pdfPath}`);
   console.log(`${LINE}\n`);
 
   await db.closeDB();

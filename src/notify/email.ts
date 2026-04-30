@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import fs from "fs";
 import { ENV } from "../config";
 
 let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
@@ -13,21 +14,42 @@ function getTransporter() {
   return transporter;
 }
 
+/**
+ * Send email with PDF attached.
+ * Falls back to plain-text body if pdfPath is not provided.
+ */
 export async function sendEmail(
   subject: string,
-  html: string,
-  text: string
+  textBody: string,
+  pdfPath?: string
 ): Promise<void> {
   if (!ENV.EMAIL_ENABLED) {
     console.log("  ⚠ Email disabled");
     return;
   }
-  await getTransporter().sendMail({
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mailOptions: Record<string, any> = {
     from: `PSX Agent <${ENV.EMAIL_USER}>`,
     to: ENV.EMAIL_TO,
     subject,
-    html,
-    text,
-  });
+    text: textBody,
+    html: `<pre style="font-family:monospace;font-size:12px;">${textBody
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")}</pre>`,
+  };
+
+  if (pdfPath && fs.existsSync(pdfPath)) {
+    mailOptions.attachments = [
+      {
+        filename: `psx-report.pdf`,
+        path: pdfPath,
+        contentType: "application/pdf",
+      },
+    ];
+    console.log(`  ✓ Attaching PDF: ${pdfPath}`);
+  }
+
+  await getTransporter().sendMail(mailOptions);
   console.log(`  ✓ Email → ${ENV.EMAIL_TO}`);
 }

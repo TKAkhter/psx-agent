@@ -1,55 +1,15 @@
 import "dotenv/config";
+import type { PortfolioType, EmailTheme, PortfolioEntry } from "./types";
 
 // ─────────────────────────────────────────────────────────────
-//  TYPES
+//  ENVIRONMENT CONFIG
 // ─────────────────────────────────────────────────────────────
 
-export type PortfolioType = "psx" | "yahoo";
-export type EmailTheme = "dark" | "light";
-
-export interface EnvConfig {
+export const ENV = Object.freeze({
   // MongoDB
-  MONGODB_URI: string;
-  MONGODB_DB: string;
-  // Email
-  EMAIL_ENABLED: boolean;
-  EMAIL_USER: string;
-  EMAIL_PASS: string;
-  EMAIL_TO: string;
-  EMAIL_THEME: EmailTheme;
-  // Meta WhatsApp Cloud API
-  WHATSAPP_ENABLED: boolean;
-  WHATSAPP_TOKEN: string; // Bearer token (System User Access Token)
-  WHATSAPP_PHONE_ID: string; // Phone number ID from Meta dashboard
-  WHATSAPP_TO: string; // Recipient phone number with country code, e.g. 923001234567
-  // Gemini
-  GEMINI_ENABLED: boolean;
-  GEMINI_API_KEY: string;
-  GEMINI_MODEL: string;
-  // Data
-  PORTFOLIO_TYPE: PortfolioType;
-  PSX_BASE_URL: string;
-  // Misc
-  TIMEZONE: string;
-}
-
-export interface PortfolioEntry {
-  symbol: string;
-  ticker: string;
-  shares: number;
-  avgCost: number;
-  name: string;
-  sector: string;
-}
-
-// ─────────────────────────────────────────────────────────────
-//  ENVIRONMENT
-// ─────────────────────────────────────────────────────────────
-
-export const ENV: EnvConfig = {
   MONGODB_URI: process.env.MONGODB_URI ?? "",
   MONGODB_DB: process.env.MONGODB_DB ?? "psx_agent",
-
+  // Email
   EMAIL_ENABLED: process.env.EMAIL_ENABLED === "true",
   EMAIL_USER: process.env.EMAIL_USER ?? "",
   EMAIL_PASS: process.env.EMAIL_PASS ?? "",
@@ -57,44 +17,46 @@ export const ENV: EnvConfig = {
   EMAIL_THEME: (process.env.EMAIL_THEME === "light"
     ? "light"
     : "dark") as EmailTheme,
-
-  // Meta WhatsApp Cloud API  (free tier: 1000 conversations/month)
-  // Setup: https://developers.facebook.com/docs/whatsapp/cloud-api/get-started
+  // Green API WhatsApp  (https://green-api.com — free 1500 msgs/month)
   WHATSAPP_ENABLED: process.env.WHATSAPP_ENABLED === "true",
-  WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN ?? "",
-  WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID ?? "",
-  WHATSAPP_TO: process.env.WHATSAPP_TO ?? "",
-
+  WHATSAPP_INSTANCE_ID: process.env.WHATSAPP_INSTANCE_ID ?? "", // e.g. 7107597280
+  WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN ?? "", // instance token
+  WHATSAPP_CHAT_ID: process.env.WHATSAPP_CHAT_ID ?? "", // e.g. 923342137306@c.us
+  // Gemini
   GEMINI_ENABLED: process.env.GEMINI_ENABLED === "true",
   GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
   GEMINI_MODEL: process.env.GEMINI_MODEL ?? "gemini-2.5-flash-preview-04-17",
-
+  // Data source
   PORTFOLIO_TYPE: (process.env.PORTFOLIO_TYPE === "yahoo"
     ? "yahoo"
     : "psx") as PortfolioType,
   PSX_BASE_URL: process.env.PSX_BASE_URL ?? "https://psxterminal.com",
-
+  // Misc
   TIMEZONE: "Asia/Karachi",
-};
+});
 
 // ─────────────────────────────────────────────────────────────
-//  SIGNAL SCORING CONSTANTS
+//  SIGNAL SCORING THRESHOLDS
 // ─────────────────────────────────────────────────────────────
 
 export const SIGNAL_THRESHOLDS = Object.freeze({
-  STRONG_BUY: 8,
-  BUY: 4,
-  SELL: -4,
-  STRONG_SELL: -8,
+  STRONG_BUY: 10, // raised from 8 — require stronger confluence
+  BUY: 5,
+  SELL: -5,
+  STRONG_SELL: -10,
 } as const);
 
+// ─────────────────────────────────────────────────────────────
+//  SCORE WEIGHTS  (PSX-tuned)
+// ─────────────────────────────────────────────────────────────
+
 export const SCORE_WEIGHTS = Object.freeze({
-  // Oscillators
+  // Oscillators — oversold/overbought
   RSI_EXTREME: 4,
   RSI_DEEP: 3,
   RSI_NORMAL: 2,
   RSI_MILD: 1,
-  MFI_EXTREME: 3,
+  MFI_EXTREME: 3, // volume-weighted RSI — high weight
   MFI_NORMAL: 2,
   ROC_STRONG: 2,
   ROC_MILD: 1,
@@ -106,7 +68,7 @@ export const SCORE_WEIGHTS = Object.freeze({
   WILLIAMS_EXTREME: 2,
   WILLIAMS_NORMAL: 1,
   // Trend
-  SUPERTREND: 3,
+  SUPERTREND: 3, // PSX retail favourite — single clean signal
   MACD_CROSSOVER: 3,
   MACD_HISTOGRAM: 2,
   MACD_WEAK: 1,
@@ -114,11 +76,13 @@ export const SCORE_WEIGHTS = Object.freeze({
   ADX_WEAK: 1,
   ICHI_CLOUD: 2,
   ICHI_TK: 1,
+  MARKET_REGIME: 2, // NEW: trending vs ranging regime
   // Price structure
   BB_EXTREME: 4,
   BB_NEAR: 2,
   MA_CROSS: 1,
   VWAP: 2,
+  VWAP_DEV: 1, // NEW: VWAP deviation %
   PIVOT_LEVEL: 1,
   POSITION_6M: 1,
   // Flow
@@ -128,9 +92,10 @@ export const SCORE_WEIGHTS = Object.freeze({
   PATTERN_MAJOR: 2,
   PATTERN_MINOR: 1,
   DIVERGENCE: 2,
-  // Fundamentals (mild bias)
+  // Fundamentals (mild bias — confirms, does not drive)
   FUNDAMENTAL_PE: 1,
   FUNDAMENTAL_DIV: 1,
+  FUNDAMENTAL_PB: 1, // NEW: Price-to-Book ratio
 } as const);
 
 export const RSI_LEVELS = Object.freeze({

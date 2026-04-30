@@ -1,6 +1,6 @@
 {
-  "name": "psx-agent",
-  "version": "4.0.0",
+  "name": "psx-analyzer",
+  "version": "1.0.0",
   "description": "AI-powered PSX portfolio analysis system",
   "main": "dist/index.js",
   "scripts": {

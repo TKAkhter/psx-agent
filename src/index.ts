@@ -37,7 +37,7 @@ process.on('unhandledRejection', async (reason: unknown) => {
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 async function main(): Promise<void> {
-  logger.info({ pid: process.pid, node: process.version }, 'PSX Analyzer v2 starting');
+  logger.info({ pid: process.pid, node: process.version }, 'PSX Analyzer v3 starting');
 
   try {
     const output = await runAnalysisEngine();

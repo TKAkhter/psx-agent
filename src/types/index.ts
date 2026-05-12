@@ -325,6 +325,7 @@ export interface RunOutput {
   totalCostBasis:        number;
   totalUnrealisedPl:     number;
   totalUnrealisedPlPct:  number;
+  notifSubject:          string;  // "PSX 07 May 2026, 09:01 PKT · 2B/1S · P&L +11.1%"
 }
 
 export interface DeliveryLog {

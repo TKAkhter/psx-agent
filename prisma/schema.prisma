@@ -7,6 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Portfolio holdings (matches your MongoDB collection exactly) ──────────────
 model Holding {
   id      String @id @default(auto()) @map("_id") @db.ObjectId
   symbol  String
@@ -19,20 +20,69 @@ model Holding {
   @@map("holdings")
 }
 
+// ── Per-run audit log ─────────────────────────────────────────────────────────
 model RunLog {
-  id                  String   @id @default(auto()) @map("_id") @db.ObjectId
-  runId               String   @unique
-  runAt               DateTime
-  durationMs          Int
-  tickersAnalysed     Int
-  portfolioValue      Float
-  unrealisedPl        Float
-  alertCount          Int
-  aiAccuracyRating    Float
+  id                   String   @id @default(auto()) @map("_id") @db.ObjectId
+  runId                String   @unique
+  runAt                DateTime
+  durationMs           Int
+  tickersAnalysed      Int
+  portfolioValue       Float
+  unrealisedPl         Float
+  unrealisedPlPct      Float
+  alertCount           Int
+  aiAccuracyRating     Float
   circuitBreakerActive Boolean
-  signals             Json
-  errors              String[]
-  createdAt           DateTime @default(now())
+  signals              Json
+  topBuys              String[]
+  topSells             String[]
+  errors               String[]
+  createdAt            DateTime @default(now())
 
   @@map("run_logs")
+}
+
+// ── Cached price snapshots — stored after each run for trend analysis ─────────
+// Enables: "compare today's price to last run" and "price momentum over N runs"
+model PriceSnapshot {
+  id           String   @id @default(auto()) @map("_id") @db.ObjectId
+  ticker       String
+  runId        String
+  capturedAt   DateTime
+  open         Float
+  high         Float
+  low          Float
+  close        Float
+  volume       Float
+  change1d     Float    // % change vs previous day
+  change1w     Float    // % change vs 5 trading days ago
+  change1m     Float    // % change vs 22 trading days ago
+  signal       String   // BUY / SELL / HOLD from this run
+  compositeScore Float
+
+  @@index([ticker, capturedAt])
+  @@map("price_snapshots")
+}
+
+// ── Fundamental data cache — refreshed weekly ─────────────────────────────────
+model FundamentalsCache {
+  id              String   @id @default(auto()) @map("_id") @db.ObjectId
+  ticker          String   @unique
+  updatedAt       DateTime
+  peRatioTtm      Float
+  peRatioForward  Float
+  pbRatio         Float
+  epsTtm          Float
+  epsGrowthYoy    Float
+  roeTtm          Float
+  dividendYield   Float
+  dividendPerShare Float
+  debtToEquity    Float
+  interestCoverage Float
+  netMargin       Float
+  revenueGrowthYoy Float
+  freeCashFlowYield Float
+  raw             Json     // full raw data from PSX Terminal
+
+  @@map("fundamentals_cache")
 }

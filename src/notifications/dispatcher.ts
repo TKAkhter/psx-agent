@@ -5,7 +5,7 @@ import { logger } from '../utils/logger';
 import { sendEmailWithPdf } from './email-sender';
 import { sendWhatsAppWithPdf } from './whatsapp-sender';
 import { generatePdfReport } from '../reporting/pdf-builder';
-import { formatPkr, formatPct, round } from '../utils/helpers';
+import { formatPkr, formatPkrCompact, formatPct, round, signalEmoji, buildNotificationSubject } from '../utils/helpers';
 import type { RunOutput, DeliveryLog, Alert } from '../types';
 
 // ─── WhatsApp condensed summary ───────────────────────────────────────────────
@@ -20,14 +20,15 @@ function buildWaSummary(output: RunOutput): string {
   const plSign = totalUnrealisedPl >= 0 ? '+' : '';
   const critAlerts = alerts.filter(a => a.severity === 'CRITICAL');
 
-  let msg = `*📊 PSX Analysis — ${date}*\n`;
-  msg += `Market: *${aiReview.marketStance.toUpperCase()}*\n`;
-  if (circuitBreakerActive) msg += `⚠️ _Circuit breaker active_\n`;
+  const subject   = output.notifSubject || output.aiReview.emailSubject;
+  let msg = `*📊 ${subject}*\n\n`;
+  msg += `Market: *${aiReview.marketStance.toUpperCase()}* — ${aiReview.marketSummary.split('.')[0]}.\n`;
+  if (circuitBreakerActive) msg += `⚠️ _Circuit breaker active — BUY signals paused_\n`;
   msg += `\n`;
 
   msg += `*Portfolio*\n`;
-  msg += `Value: ${formatPkr(totalPortfolioValue)}\n`;
-  msg += `P&L: ${plSign}${formatPkr(totalUnrealisedPl)} (${plSign}${round(totalUnrealisedPlPct,1)}%)\n\n`;
+  msg += `Value: ${formatPkrCompact(totalPortfolioValue)}\n`;
+  msg += `P&L: ${plSign}${formatPkrCompact(totalUnrealisedPl)} (${plSign}${round(totalUnrealisedPlPct,1)}%)\n\n`;
 
   if (critAlerts.length > 0) {
     msg += `*🚨 Critical Alerts*\n`;
@@ -40,7 +41,7 @@ function buildWaSummary(output: RunOutput): string {
     msg += `*Portfolio Signals*\n`;
     actionable.forEach(r => {
       const pl = r.position ? ` (${formatPct(r.position.unrealisedPlPct)})` : '';
-      msg += `${EMOJI[r.signal] ?? '⚪'} *${r.ticker}* — ${r.signal.replace('_',' ')}${pl}\n`;
+      msg += `${signalEmoji(r.signal) ?? '⚪'} *${r.ticker}* — ${r.signal.replace('_',' ')}${pl}\n`;
       msg += `  Buy≤${r.priceTargets.aggressiveBuyAt} | T1: ${r.priceTargets.target1} | SL: ${r.priceTargets.stopLoss}\n`;
       if (r.suggestedReplacement) msg += `  💡 Replace with: *${r.suggestedReplacement}*\n`;
     });
@@ -81,7 +82,8 @@ export async function dispatchNotifications(output: RunOutput): Promise<Delivery
   logger.info('Generating PDF report');
   const pdfBuffer = await generatePdfReport(output);
   const filename  = `PSX-Analysis-${format(output.runAt, 'yyyy-MM-dd-HHmm')}.pdf`;
-  const subject   = output.aiReview.emailSubject;
+  // Use the pre-built subject from engine (format: "PSX 07 May 2026, 09:01 PKT · 2B/1S · P&L +11.1%")
+  const subject   = output.notifSubject || output.aiReview.emailSubject;
   const waSummary = buildWaSummary(output);
   const emailBody = waSummary.replace(/[*_]/g, '');
 

@@ -1,10 +1,24 @@
-# PSX Analyzer v2
+# PSX Analyzer v4
 
 Automated AI-powered Pakistan Stock Exchange portfolio analysis system.
 
 Runs on a schedule via Render.com cron, generates a full PDF report, and delivers it via email and/or WhatsApp.
 
 ---
+
+## What's New in v4
+
+| Area | Change |
+|---|---|
+| **Price accuracy** | Mock candles now walk backwards from pinned real PSX prices (May 2026) — `currentPrice` always matches real market |
+| **DB persistence** | Empty `holdings` collection → auto-seeded with default portfolio. Price snapshots and fundamentals cached per run |
+| **Notification subject** | Format: `PSX 07 May 2026, 09:01 PKT · 2B/1S · P&L +11.1%` |
+| **Logging** | Structured phases with `▶ / ✅ / ⚠️ / ❌` prefixes, signal table with emoji, final summary banner |
+| **DB-enhanced analysis** | Historical price trend from past runs used to add `HISTORICAL_DOWNTREND_CAUTION` flag |
+| **Fundamentals cache** | MongoDB `fundamentals_cache` collection avoids re-fetching from PSX Terminal on every run (7-day TTL) |
+| **PDF report** | Improved design: cover with portfolio value, sorted holdings (critical alerts first), page numbers, A4 header/footer |
+| **WhatsApp** | Summary uses `notifSubject` as headline, compact PKR formatting |
+
 
 ## What it does
 

@@ -79,59 +79,58 @@ function parseReview(raw: string, runId: string): AiReviewResult {
   });
 
   if (parsed) {
-    return {
-      runId,
-      timestamp:            String(parsed.timestamp ?? new Date().toISOString()),
-      marketStance:         (parsed.market_stance as AiReviewResult['marketStance']) ?? 'neutral',
-      marketSummary:        String(parsed.market_summary ?? ''),
-      keyMarketDrivers:     Array.isArray(parsed.key_market_drivers) ? parsed.key_market_drivers as string[] : [],
-      portfolioReview:      mapReview((parsed.portfolio_review as unknown[]) ?? []),
-      discoveryReview:      mapReview((parsed.discovery_review as unknown[]) ?? []),
-      sectorOutlook:        (parsed.sector_outlook as Record<string,string>) ?? {},
-      concentrationRisks:   (parsed.concentration_risks as string[]) ?? [],
-      macroRisks:           (parsed.macro_risks as string[]) ?? [],
-      macroOpportunities:   (parsed.macro_opportunities as string[]) ?? [],
-      algorithmScore:       Number(parsed.algorithm_score ?? 5),
-      algorithmFeedback:    String(parsed.algorithm_feedback ?? ''),
-      globalRiskFlags:      (parsed.global_risk_flags as string[]) ?? [],
-      notificationHeadline: String(parsed.notification_headline ?? 'PSX Analysis Complete'),
-      emailSubject:         String(parsed.email_subject ?? `PSX Analysis — ${new Date().toDateString()}`),
-    };
-  }
+  return {
+    runId,
+    timestamp:            String(parsed.timestamp ?? new Date().toISOString()),
+    marketStance:         (parsed.market_stance as AiReviewResult['marketStance']) ?? 'neutral',
+    marketSummary:        String(parsed.market_summary ?? ''),
+    keyMarketDrivers:     Array.isArray(parsed.key_market_drivers) ? parsed.key_market_drivers as string[] : [],
+    portfolioReview:      mapReview((parsed.portfolio_review as unknown[]) ?? []),
+    discoveryReview:      mapReview((parsed.discovery_review as unknown[]) ?? []),
+    sectorOutlook:        (parsed.sector_outlook as Record<string,string>) ?? {},
+    concentrationRisks:   (parsed.concentration_risks as string[]) ?? [],
+    macroRisks:           (parsed.macro_risks as string[]) ?? [],
+    macroOpportunities:   (parsed.macro_opportunities as string[]) ?? [],
+    algorithmScore:       Number(parsed.algorithm_score ?? 5),
+    algorithmFeedback:    String(parsed.algorithm_feedback ?? ''),
+    globalRiskFlags:      (parsed.global_risk_flags as string[]) ?? [],
+    notificationHeadline: String(parsed.notification_headline ?? 'PSX Analysis Complete'),
+    emailSubject:         String(parsed.email_subject ?? `PSX Analysis — ${new Date().toDateString()}`),
+  };
+}
 
   const portfolio = extractArray(clean, 'portfolio_review');
   const discovery = extractArray(clean, 'discovery_review');
 
   if (portfolio.length > 0 || discovery.length > 0) {
-    logger.warn({
-      portfolio: portfolio.length,
-      discovery: discovery.length,
-    }, 'Using partially recovered AI data');
+  logger.warn({
+    portfolio: portfolio.length,
+    discovery: discovery.length,
+  }, 'Using partially recovered AI data');
 
-    return {
-      runId,
-      timestamp: new Date().toISOString(),
-      marketStance: 'neutral',
-      marketSummary: 'Partial AI response recovered.',
-      keyMarketDrivers: [],
-      portfolioReview: mapReview(portfolio),
-      discoveryReview: mapReview(discovery),
-      sectorOutlook: {},
-      concentrationRisks: [],
-      macroRisks: [],
-      macroOpportunities: [],
-      algorithmScore: 0,
-      algorithmFeedback: 'Partial parse',
-      globalRiskFlags: ['AI_PARTIAL_RECOVERY'],
-      notificationHeadline: 'PSX Analysis — Partial AI data',
-      emailSubject: `PSX Analysis — ${new Date().toDateString()} (Partial)`,
-    };
-  }
-
-  logger.error({ preview: clean.slice(0, 200) }, 'AI non-JSON response');
-  return fallback(runId);
+  return {
+    runId,
+    timestamp: new Date().toISOString(),
+    marketStance: 'neutral',
+    marketSummary: 'Partial AI response recovered.',
+    keyMarketDrivers: [],
+    portfolioReview: mapReview(portfolio),
+    discoveryReview: mapReview(discovery),
+    sectorOutlook: {},
+    concentrationRisks: [],
+    macroRisks: [],
+    macroOpportunities: [],
+    algorithmScore: 0,
+    algorithmFeedback: 'Partial parse',
+    globalRiskFlags: ['AI_PARTIAL_RECOVERY'],
+    notificationHeadline: 'PSX Analysis — Partial AI data',
+    emailSubject: `PSX Analysis — ${new Date().toDateString()} (Partial)`,
+  };
 }
 
+logger.error({ preview: clean.slice(0, 200) }, 'AI non-JSON response');
+return fallback(runId);
+}
 
 function fallback(runId: string): AiReviewResult {
   return {

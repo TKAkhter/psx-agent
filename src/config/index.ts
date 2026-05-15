@@ -39,8 +39,14 @@ const schema = Joi.object({
   ALERT_PRICE_DROP_PCT:         Joi.number().default(5),
   CIRCUIT_BREAKER_INDEX_DROP_PCT: Joi.number().default(5),
   PSXTERMINAL_API_KEY:          Joi.string().allow('').default(''),
+  // Data source strategy:
+  //   auto         — PSX.com.pk scraper first, PSX Terminal API second, stub fallback (default)
+  //   psx_scraper  — PSX.com.pk scraper only (+ stub fallback), no API key needed
+  //   psxterminal  — PSX Terminal API only (requires PSXTERMINAL_API_KEY)
+  //   stub         — deterministic stubs only (useful for testing/CI)
+  DATA_SOURCE:                  Joi.string().valid('auto','psx_scraper','psxterminal','stub').default('auto'),
   LOG_LEVEL:                    Joi.string().default('info'),
-  NODE_ENV:                     Joi.string().default('production'),
+  NODE_ENV:                     Joi.string().default('development'),
 }).unknown(true);
 
 const { error, value } = schema.validate(process.env);
@@ -84,6 +90,7 @@ export const CONFIG = {
   ALERT_PRICE_DROP_PCT:   parseFloat(e.ALERT_PRICE_DROP_PCT),
   CIRCUIT_BREAKER_DROP_PCT: parseFloat(e.CIRCUIT_BREAKER_INDEX_DROP_PCT),
   PSXTERMINAL_API_KEY:    e.PSXTERMINAL_API_KEY,
+  DATA_SOURCE:            e.DATA_SOURCE as 'auto' | 'psx_scraper' | 'psxterminal' | 'stub',
   LOG_LEVEL:              e.LOG_LEVEL,
   NODE_ENV:               e.NODE_ENV,
 

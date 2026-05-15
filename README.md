@@ -1,4 +1,4 @@
-# PSX Analyzer v4
+# PSX Analyzer v5
 
 Automated AI-powered Pakistan Stock Exchange portfolio analysis system.
 
@@ -6,7 +6,7 @@ Runs on a schedule via Render.com cron, generates a full PDF report, and deliver
 
 ---
 
-## What's New in v4
+## What's New in v5
 
 | Area | Change |
 |---|---|

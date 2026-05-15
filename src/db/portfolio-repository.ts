@@ -183,7 +183,7 @@ export async function saveFundamentalsCache(ticker: string, data: Record<string,
         netMargin:        Number(data.netProfitMarginPct ?? 0),
         revenueGrowthYoy: Number(data.revenueGrowthYoy  ?? 0),
         freeCashFlowYield: Number(data.freeCashFlowYield ?? 0),
-        raw:              JSON.stringify(data),
+        raw:              JSON.parse(JSON.stringify(data)),
       },
       create: {
         ticker,
@@ -201,7 +201,7 @@ export async function saveFundamentalsCache(ticker: string, data: Record<string,
         netMargin:        Number(data.netProfitMarginPct ?? 0),
         revenueGrowthYoy: Number(data.revenueGrowthYoy  ?? 0),
         freeCashFlowYield: Number(data.freeCashFlowYield ?? 0),
-        raw:              JSON.stringify(data),
+        raw:              JSON.parse(JSON.stringify(data)),
       },
     });
   } catch (err) {

@@ -11,17 +11,15 @@ import type { RunOutput, DeliveryLog, Alert } from '../types';
 // ─── WhatsApp condensed summary ───────────────────────────────────────────────
 function buildWaSummary(output: RunOutput): string {
   const { runAt, macro: m, portfolioRecs, discoveryPicks, alerts, aiReview,
-          totalPortfolioValue, totalUnrealisedPl, totalUnrealisedPlPct, circuitBreakerActive } = output;
+          totalPortfolioValue, totalUnrealisedPl, totalUnrealisedPlPct, circuitBreakerActive,
+          notifSubject } = output;
 
-  const EMOJI: Record<string, string> = {
-    STRONG_BUY:'🟢🟢', BUY:'🟢', HOLD:'🟡', SELL:'🔴', STRONG_SELL:'🔴🔴',
-  };
+  // signalEmoji helper imported from utils/helpers
   const date = format(runAt, 'dd MMM yyyy HH:mm');
   const plSign = totalUnrealisedPl >= 0 ? '+' : '';
   const critAlerts = alerts.filter(a => a.severity === 'CRITICAL');
 
-  const subject   = output.notifSubject || output.aiReview.emailSubject;
-  let msg = `*📊 ${subject}*\n\n`;
+  let msg = `*📊 ${notifSubject}*\n\n`;
   msg += `Market: *${aiReview.marketStance.toUpperCase()}* — ${aiReview.marketSummary.split('.')[0]}.\n`;
   if (circuitBreakerActive) msg += `⚠️ _Circuit breaker active — BUY signals paused_\n`;
   msg += `\n`;

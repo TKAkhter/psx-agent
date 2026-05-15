@@ -18,7 +18,11 @@ import {
 import type { OHLCVCandle, TechnicalIndicators } from '../types';
 
 // ─── Utilities ────────────────────────────────────────────────────────────────
-const lastN = (arr: number[] | undefined): number => arr?.[arr.length - 1] ?? 0;
+// Safe last — returns fallback instead of 0 to prevent NaN in calcs
+const lastN = (arr: number[] | undefined, fallback = 0): number => {
+  const v = arr?.[arr.length - 1];
+  return (v !== undefined && !isNaN(v) && isFinite(v)) ? v : fallback;
+};
 const lastN2 = (arr: number[] | undefined): number => arr?.[arr.length - 2] ?? 0;
 
 // ─── OBV ─────────────────────────────────────────────────────────────────────
@@ -256,23 +260,24 @@ export function computeTechnicalIndicators(candles: OHLCVCandle[]): TechnicalInd
   const cur     = closes[n - 1];
 
   // ── Moving Averages ────────────────────────────────────────────────────────
-  const sma10  = lastN(SMA.calculate({ period: 10,  values: closes }));
-  const sma20  = lastN(SMA.calculate({ period: 20,  values: closes }));
-  const sma50  = lastN(SMA.calculate({ period: 50,  values: closes }));
-  const sma100 = lastN(SMA.calculate({ period: 100, values: closes }));
-  const sma200 = lastN(SMA.calculate({ period: 200, values: closes }));
-  const ema9   = lastN(EMA.calculate({ period: 9,   values: closes }));
-  const ema12  = lastN(EMA.calculate({ period: 12,  values: closes }));
-  const ema21  = lastN(EMA.calculate({ period: 21,  values: closes }));
-  const ema26  = lastN(EMA.calculate({ period: 26,  values: closes }));
-  const ema50  = lastN(EMA.calculate({ period: 50,  values: closes }));
+  // Moving averages — fallback to current price when insufficient history
+  const sma10  = lastN(SMA.calculate({ period: Math.min(10,  n), values: closes }), cur);
+  const sma20  = lastN(SMA.calculate({ period: Math.min(20,  n), values: closes }), cur);
+  const sma50  = lastN(SMA.calculate({ period: Math.min(50,  n), values: closes }), cur);
+  const sma100 = lastN(SMA.calculate({ period: Math.min(100, n), values: closes }), cur);
+  const sma200 = lastN(SMA.calculate({ period: Math.min(200, n), values: closes }), cur);
+  const ema9   = lastN(EMA.calculate({ period: Math.min(9,   n), values: closes }), cur);
+  const ema12  = lastN(EMA.calculate({ period: Math.min(12,  n), values: closes }), cur);
+  const ema21  = lastN(EMA.calculate({ period: Math.min(21,  n), values: closes }), cur);
+  const ema26  = lastN(EMA.calculate({ period: Math.min(26,  n), values: closes }), cur);
+  const ema50  = lastN(EMA.calculate({ period: Math.min(50,  n), values: closes }), cur);
   const vwap   = computeVWAP(candles);
 
   // ── RSI ────────────────────────────────────────────────────────────────────
-  const rsiVals14 = RSI.calculate({ period: 14, values: closes });
-  const rsiVals9  = RSI.calculate({ period: 9,  values: closes });
-  const rsi14     = lastN(rsiVals14);
-  const rsi9      = lastN(rsiVals9);
+  const rsiVals14 = RSI.calculate({ period: Math.min(14, n-1), values: closes });
+  const rsiVals9  = RSI.calculate({ period: Math.min(9,  n-1), values: closes });
+  const rsi14     = lastN(rsiVals14, 50);  // 50 = neutral
+  const rsi9      = lastN(rsiVals9,  50);
   const rsiDiv    = getRSIDivergence(closes, rsiVals14);
 
   // ── MACD ───────────────────────────────────────────────────────────────────
@@ -291,22 +296,22 @@ export function computeTechnicalIndicators(candles: OHLCVCandle[]): TechnicalInd
   else if (macdHist < 0 && macdLine < 0)   macdSignal = 'bearish';
 
   // ── Stochastic ─────────────────────────────────────────────────────────────
-  const stochVals = Stochastic.calculate({ high: highs, low: lows, close: closes, period: 14, signalPeriod: 3 });
+  const stochVals = Stochastic.calculate({ high: highs, low: lows, close: closes, period: Math.min(14, n-1), signalPeriod: 3 });
   const stochCur  = stochVals[stochVals.length - 1];
   const stochasticK = stochCur?.k ?? 50;
   const stochasticD = stochCur?.d ?? 50;
 
   // ── Williams %R ────────────────────────────────────────────────────────────
-  const williamsR = lastN(WilliamsR.calculate({ high: highs, low: lows, close: closes, period: 14 }));
+  const williamsR = lastN(WilliamsR.calculate({ high: highs, low: lows, close: closes, period: Math.min(14, n-1) }), -50);
 
   // ── CCI / MFI / ROC ────────────────────────────────────────────────────────
-  const cci20 = lastN(CCI.calculate({ high: highs, low: lows, close: closes, period: 20 }));
-  const mfi14 = lastN(MFI.calculate({ high: highs, low: lows, close: closes, volume: volumes, period: 14 }));
-  const roc10 = lastN(ROC.calculate({ values: closes, period: 10 }));
+  const cci20 = lastN(CCI.calculate({ high: highs, low: lows, close: closes, period: Math.min(20, n-1) }), 0);
+  const mfi14 = lastN(MFI.calculate({ high: highs, low: lows, close: closes, volume: volumes, period: Math.min(14, n-1) }), 50);
+  const roc10 = lastN(ROC.calculate({ values: closes, period: Math.min(10, n-1) }), 0);
 
   // ── ATR / Bollinger ────────────────────────────────────────────────────────
-  const atrVals = ATR.calculate({ high: highs, low: lows, close: closes, period: 14 });
-  const atr14   = lastN(atrVals);
+  const atrVals = ATR.calculate({ high: highs, low: lows, close: closes, period: Math.min(14, n-1) });
+  const atr14   = lastN(atrVals, cur * 0.01);  // fallback = 1% of price
   const atrPct  = cur > 0 ? (atr14 / cur) * 100 : 0;
 
   const bbVals   = BollingerBands.calculate({ period: 20, values: closes, stdDev: 2 });
@@ -324,11 +329,11 @@ export function computeTechnicalIndicators(candles: OHLCVCandle[]): TechnicalInd
   else if (cur < bbMid - (bbMid - bbLower) * 0.5) bbPosition = 'inside_lower';
 
   // ── ADX ────────────────────────────────────────────────────────────────────
-  const adxVals = ADX.calculate({ high: highs, low: lows, close: closes, period: 14 });
+  const adxVals = ADX.calculate({ high: highs, low: lows, close: closes, period: Math.min(14, n-1) });
   const adxCur  = adxVals[adxVals.length - 1];
-  const adx14   = adxCur?.adx ?? 20;
-  const diPlus  = adxCur?.pdi ?? 20;
-  const diMinus = adxCur?.mdi ?? 20;
+  const adx14   = (adxCur?.adx && isFinite(adxCur.adx)) ? adxCur.adx : 20;
+  const diPlus  = (adxCur?.pdi && isFinite(adxCur.pdi)) ? adxCur.pdi : 20;
+  const diMinus = (adxCur?.mdi && isFinite(adxCur.mdi)) ? adxCur.mdi : 20;
 
   // ── Volume ─────────────────────────────────────────────────────────────────
   const obvSeries   = computeOBV(candles);
@@ -356,12 +361,14 @@ export function computeTechnicalIndicators(candles: OHLCVCandle[]): TechnicalInd
   const keltner = computeKeltner(candles);
 
   // ── Support / Resistance ───────────────────────────────────────────────────
-  const support1    = Math.min(...lows.slice(-15));
-  const support2    = Math.min(...lows.slice(-30));
-  const support3    = Math.min(...lows.slice(-60));
-  const resistance1 = Math.max(...highs.slice(-15));
-  const resistance2 = Math.max(...highs.slice(-30));
-  const resistance3 = Math.max(...highs.slice(-60));
+  const safeMin = (arr: number[]) => arr.length > 0 ? Math.min(...arr.filter(v => v > 0 && isFinite(v))) : cur * 0.95;
+  const safeMax = (arr: number[]) => arr.length > 0 ? Math.max(...arr.filter(v => v > 0 && isFinite(v))) : cur * 1.05;
+  const support1    = safeMin(lows.slice(-15));
+  const support2    = safeMin(lows.slice(-30));
+  const support3    = safeMin(lows.slice(-60));
+  const resistance1 = safeMax(highs.slice(-15));
+  const resistance2 = safeMax(highs.slice(-30));
+  const resistance3 = safeMax(highs.slice(-60));
 
   const pivot = (highs[n-1] + lows[n-1] + closes[n-1]) / 3;
   const r1 = 2 * pivot - lows[n-1];
@@ -390,41 +397,57 @@ export function computeTechnicalIndicators(candles: OHLCVCandle[]): TechnicalInd
   const roc5  = closes.length >= 6  ? ((cur - closes[closes.length - 6])  / closes[closes.length - 6])  * 100 : 0;
   const relativeStrengthVsIndex = parseFloat((1 + roc5 / 100).toFixed(3)); // placeholder until index feed added
 
+  // ── Sanity: replace any NaN/Infinity with safe fallbacks ────────────────
+  const safe = (v: number, fb: number) => (isNaN(v) || !isFinite(v)) ? fb : v;
+  const safeP = (v: number) => safe(v, cur);  // price fallback
+  const safePct = (v: number) => safe(v, 0);   // percent fallback
+
   return {
-    sma10, sma20, sma50, sma100, sma200,
-    ema9, ema12, ema21, ema26, ema50, vwap,
-    rsi14, rsi9, rsiDivergence: rsiDiv,
-    macdLine, macdSignalLine: macdSigLine, macdHistogram: macdHist, macdSignal,
-    stochasticK, stochasticD,
-    williamsR, cci20, mfi14, roc10,
-    atr14, atrPct,
-    bbUpper, bbMid, bbLower, bbWidth, bbSqueeze, bbPosition,
-    historicalVolatility30d: hv30,
-    obv, obvTrend, obvDivergence: obvDiv,
-    volumeRatio, volumeSignal,
-    accDistLine: adLine, chaikinMoneyFlow: cmf,
-    adx14, diPlus, diMinus,
+    sma10: safeP(sma10), sma20: safeP(sma20), sma50: safeP(sma50),
+    sma100: safeP(sma100), sma200: safeP(sma200),
+    ema9: safeP(ema9), ema12: safeP(ema12), ema21: safeP(ema21),
+    ema26: safeP(ema26), ema50: safeP(ema50), vwap: safeP(vwap),
+    rsi14:  safe(rsi14, 50),  rsi9: safe(rsi9, 50), rsiDivergence: rsiDiv,
+    macdLine:      safePct(macdLine),
+    macdSignalLine: safePct(macdSigLine),
+    macdHistogram:  safePct(macdHist),
+    macdSignal,
+    stochasticK: safe(stochasticK, 50), stochasticD: safe(stochasticD, 50),
+    williamsR:   safe(williamsR, -50),
+    cci20:       safePct(cci20),
+    mfi14:       safe(mfi14, 50),
+    roc10:       safePct(roc10),
+    atr14:       safe(atr14, cur * 0.01),
+    atrPct:      safe(atrPct, 1),
+    bbUpper: safeP(bbUpper), bbMid: safeP(bbMid), bbLower: safeP(bbLower),
+    bbWidth: safe(bbWidth, 0.04), bbSqueeze, bbPosition,
+    historicalVolatility30d: safe(hv30, 20),
+    obv: safePct(obv), obvTrend, obvDivergence: obvDiv,
+    volumeRatio: safe(volumeRatio, 1), volumeSignal,
+    accDistLine: safePct(adLine), chaikinMoneyFlow: safe(cmf, 0),
+    adx14: safe(adx14, 20), diPlus: safe(diPlus, 20), diMinus: safe(diMinus, 20),
     trendShort, trendMid, trendLong, ichimokuSignal: ichimoku,
     parabolicSarSignal: psar.signal,
-    parabolicSarValue:  psar.value,
-    keltnerUpper: keltner.upper,
-    keltnerMid:   keltner.mid,
-    keltnerLower: keltner.lower,
+    parabolicSarValue:  safeP(psar.value),
+    keltnerUpper: safeP(keltner.upper),
+    keltnerMid:   safeP(keltner.mid),
+    keltnerLower: safeP(keltner.lower),
     keltnerPosition: keltner.position,
-    support1, support2, support3,
-    resistance1, resistance2, resistance3,
-    pivot, r1, r2, r3, s1, s2, s3,
-    fibRetracement382: fib382,
-    fibRetracement500: fib500,
-    fibRetracement618: fib618,
+    support1: safeP(support1), support2: safeP(support2), support3: safeP(support3),
+    resistance1: safeP(resistance1), resistance2: safeP(resistance2), resistance3: safeP(resistance3),
+    pivot: safeP(pivot), r1: safeP(r1), r2: safeP(r2), r3: safeP(r3),
+    s1: safeP(s1), s2: safeP(s2), s3: safeP(s3),
+    fibRetracement382: safeP(fib382),
+    fibRetracement500: safeP(fib500),
+    fibRetracement618: safeP(fib618),
     candlestickPattern: candle.pattern,
     candlestickBullish: candle.bullish,
-    priceVsVwapPct:         parseFloat(priceVsVwapPct.toFixed(2)),
-    priceVs52wHighPct:      parseFloat(priceVs52wHighPct.toFixed(2)),
-    priceVs52wLowPct:       parseFloat(priceVs52wLowPct.toFixed(2)),
+    priceVsVwapPct:         safePct(priceVsVwapPct),
+    priceVs52wHighPct:      safePct(priceVs52wHighPct),
+    priceVs52wLowPct:       safePct(priceVs52wLowPct),
     goldenCrossActive,
     deathCrossActive,
     trendConsistency:       tc,
-    relativeStrengthVsIndex,
+    relativeStrengthVsIndex: safe(relativeStrengthVsIndex, 1),
   };
 }

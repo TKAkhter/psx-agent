@@ -15,6 +15,35 @@ import { round, formatPkr, formatPct, formatPkrCompact } from '../utils/helpers'
 import { logger } from '../utils/logger';
 import type { RunOutput, StockRecommendation } from '../types';
 
+// ─── Safe number formatters (never emit NaN in HTML) ──────────────────────────
+
+function safeNum(v: unknown, decimals = 2): string {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (isNaN(n) || !isFinite(n)) return '—';
+  return n.toFixed(decimals);
+}
+
+function safePkr(v: unknown): string {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (isNaN(n) || !isFinite(n)) return '—';
+  // Use compact for large values, full for small
+  if (Math.abs(n) >= 1_000_000) return `₨${(n / 1_000_000).toFixed(1)}M`;
+  if (Math.abs(n) >= 1_000)     return `₨${n.toLocaleString('en-PK', { maximumFractionDigits: 0 })}`;
+  return `₨${n.toFixed(2)}`;
+}
+
+function safePct(v: unknown, decimals = 1): string {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (isNaN(n) || !isFinite(n)) return '—';
+  return `${n >= 0 ? '+' : ''}${n.toFixed(decimals)}%`;
+}
+
+function safePrice(v: unknown): string {
+  const n = typeof v === 'number' ? v : parseFloat(String(v ?? ''));
+  if (isNaN(n) || !isFinite(n) || n <= 0) return '—';
+  return `₨${n.toFixed(2)}`;
+}
+
 // ─── Design tokens ─────────────────────────────────────────────────────────────
 
 const C = {
@@ -129,12 +158,12 @@ function noobCard(rec: StockRecommendation, aiReview: RunOutput['aiReview']): st
 
   <!-- Price boxes -->
   <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px">
-    ${priceBox('Current Price', `PKR ${rec.currentPrice}`, `${rec.dayChangePct >= 0 ? '▲' : '▼'} ${formatPct(rec.dayChangePct)} today`, '#fff', '#444')}
-    ${priceBox('Buy at or below', `PKR ${pt.aggressiveBuyAt}`, 'Aggressive entry', '#f0fdf4', '#0a6e3c')}
-    ${priceBox('Take profit at', `PKR ${pt.target1}`, `+${pt.potentialUpsidePct}% upside`, '#f0fdf4', '#1a8a50')}
-    ${priceBox('Exit if falls to', `PKR ${pt.stopLoss}`, `-${pt.potentialDownsidePct}% stop`, '#fff1ee', '#b83232')}
+    ${priceBox('Current Price', `${safePrice(rec.currentPrice)}`, `${rec.dayChangePct >= 0 ? '▲' : '▼'} ${safePct(rec.dayChangePct)} today`, '#fff', '#444')}
+    ${priceBox('Buy at or below', `${safePrice(pt.aggressiveBuyAt)}`, 'Aggressive entry', '#f0fdf4', '#0a6e3c')}
+    ${priceBox('Take profit at', `${safePrice(pt.target1)}`, `${safeNum(pt.potentialUpsidePct)}% upside`, '#f0fdf4', '#1a8a50')}
+    ${priceBox('Exit if falls to', `${safePrice(pt.stopLoss)}`, `${safeNum(pt.potentialDownsidePct)}% stop`, '#fff1ee', '#b83232')}
     ${pos
-      ? priceBox('Your P&L', formatPct(pos.unrealisedPlPct), formatPkrCompact(pos.unrealisedPlPkr), pos.unrealisedPlPct >= 0 ? '#f0fdf4' : '#fff1ee', plC(pos.unrealisedPlPct))
+      ? priceBox('Your P&L', safePct(pos.unrealisedPlPct), safePkr(pos.unrealisedPlPkr), pos.unrealisedPlPct >= 0 ? '#f0fdf4' : '#fff1ee', plC(pos.unrealisedPlPct))
       : ''}
   </div>
 
@@ -211,10 +240,10 @@ function proPanel(rec: StockRecommendation): string {
 
   <!-- Score breakdown -->
   <div style="margin-bottom:14px;max-width:350px">
-    ${progressBar(rec.compositeScore.technical,   'Technical'  )}
-    ${progressBar(rec.compositeScore.fundamental, 'Fundamental')}
-    ${progressBar(rec.compositeScore.macro,        'Macro'      )}
-    ${progressBar(rec.compositeScore.sentiment,    'Sentiment'  )}
+    ${progressBar(Math.round(rec.compositeScore.technical || 0),   'Technical'  )}
+    ${progressBar(Math.round(rec.compositeScore.fundamental || 0), 'Fundamental')}
+    ${progressBar(Math.round(rec.compositeScore.macro        || 0), 'Macro'      )}
+    ${progressBar(Math.round(rec.compositeScore.sentiment    || 0), 'Sentiment'  )}
     <div style="font-size:10px;color:#666;margin-top:4px;font-style:italic">${rec.compositeScore.interpretation}</div>
   </div>
 
@@ -223,16 +252,16 @@ function proPanel(rec: StockRecommendation): string {
     <div style="font-weight:700;color:#0a6e3c;font-size:12px;margin-bottom:6px">ACTION LEVELS</div>
     <div style="display:flex;flex-wrap:wrap;gap:10px">
       ${[
-        ['Aggr. Buy ↓',  `PKR ${pt.aggressiveBuyAt}`,   '#0a6e3c'],
-        ['Consv. Buy ↓', `PKR ${pt.conservativeBuyAt}`,  '#1a8a50'],
-        ['Target 1 ↑',   `PKR ${pt.target1}  +${pt.potentialUpsidePct}%`, '#0a6e3c'],
-        ['Target 2 ↑',   `PKR ${pt.target2}`,            '#1a8a50'],
-        ['Target 3 ↑',   `PKR ${pt.target3}`,            '#555'  ],
-        ['Stop Loss ↓',  `PKR ${pt.stopLoss}  -${pt.potentialDownsidePct}%`, '#b83232'],
-        ['Hard Stop ↓',  `PKR ${pt.hardStopLoss}`,       '#7a0a0a'],
+        ['Aggr. Buy ↓',  `${safePrice(pt.aggressiveBuyAt)}`,   '#0a6e3c'],
+        ['Consv. Buy ↓', `${safePrice(pt.conservativeBuyAt)}`,  '#1a8a50'],
+        ['Target 1 ↑',   `${safePrice(pt.target1)}  +${safeNum(pt.potentialUpsidePct,1)}%`, '#0a6e3c'],
+        ['Target 2 ↑',   `${safePrice(pt.target2)}`,            '#1a8a50'],
+        ['Target 3 ↑',   `${safePrice(pt.target3)}`,            '#555'  ],
+        ['Stop Loss ↓',  `${safePrice(pt.stopLoss)}  -${safeNum(pt.potentialDownsidePct,1)}%`, '#b83232'],
+        ['Hard Stop ↓',  `${safePrice(pt.hardStopLoss)}`,       '#7a0a0a'],
         ['R/R Ratio',    `${pt.riskRewardRatio}:1`,       pt.riskRewardRatio >= 2 ? '#0a6e3c' : '#b08000'],
-        ['Fib 61.8%',    `PKR ${ti.fibRetracement618.toFixed(1)}`, '#555'],
-        ['Pivot',        `PKR ${ti.pivot.toFixed(1)}`,   '#555'],
+        ['Fib 61.8%',    `${safePrice(ti.fibRetracement618)}`, '#555'],
+        ['Pivot',        `${safePrice(ti.pivot)}`,   '#555'],
       ].map(([l,v,col]) => `<span style="white-space:nowrap;font-size:11px"><span style="color:#888">${l}:</span> <strong style="color:${col ?? '#1a1a1a'}">${v}</strong></span>`).join('')}
     </div>
     <div style="margin-top:6px;color:${c.text};font-size:10px">📍 ${pt.currentVsTargetLabel}</div>
@@ -243,22 +272,22 @@ function proPanel(rec: StockRecommendation): string {
     <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">TECHNICAL INDICATORS</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px">
       ${indRow([
-        ['RSI-14', round(ti.rsi14), rsiCol],
-        ['RSI-9',  round(ti.rsi9)],
+        ['RSI-14', safeNum(ti.rsi14, 1), rsiCol],
+        ['RSI-9',  safeNum(ti.rsi9, 1)],
         ['RSI Div', ti.rsiDivergence !== 'none' ? ti.rsiDivergence : '—', ti.rsiDivergence==='bullish'?'#0a6e3c':ti.rsiDivergence==='bearish'?'#b83232':undefined],
         ['MACD', ti.macdSignal.replace(/_/g,' '), ti.macdSignal.includes('bullish')?'#0a6e3c':ti.macdSignal.includes('bearish')?'#b83232':undefined],
-        ['Hist', round(ti.macdHistogram,3)],
-        ['Stoch K/D', `${round(ti.stochasticK)}/${round(ti.stochasticD)}`],
-        ['Will%R', round(ti.williamsR), ti.williamsR<-80?'#0a6e3c':ti.williamsR>-20?'#b83232':undefined],
-        ['CCI-20', round(ti.cci20), ti.cci20<-100?'#0a6e3c':ti.cci20>100?'#b83232':undefined],
-        ['MFI-14', round(ti.mfi14), ti.mfi14<20?'#0a6e3c':ti.mfi14>80?'#b83232':undefined],
-        ['ROC-10', `${round(ti.roc10)}%`],
+        ['Hist', safeNum(ti.macdHistogram, 3)],
+        ['Stoch K/D', `${safeNum(ti.stochasticK, 0)}/${safeNum(ti.stochasticD, 0)}`],
+        ['Will%R', safeNum(ti.williamsR, 0), ti.williamsR<-80?'#0a6e3c':ti.williamsR>-20?'#b83232':undefined],
+        ['CCI-20', safeNum(ti.cci20, 0), ti.cci20<-100?'#0a6e3c':ti.cci20>100?'#b83232':undefined],
+        ['MFI-14', safeNum(ti.mfi14, 0), ti.mfi14<20?'#0a6e3c':ti.mfi14>80?'#b83232':undefined],
+        ['ROC-10', `${safeNum(ti.roc10, 1)}%`],
       ])}
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px">
       ${indRow([
-        ['ADX-14', `${round(ti.adx14)} ${ti.adx14>25?'✓':'~'}`, adxCol],
-        ['+DI/-DI', `${round(ti.diPlus)}/${round(ti.diMinus)}`, ti.diPlus>ti.diMinus?'#0a6e3c':'#b83232'],
+        ['ADX-14', `${safeNum(ti.adx14, 0)} ${ti.adx14>25?'✓':'~'}`, adxCol],
+        ['+DI/-DI', `${safeNum(ti.diPlus, 0)}/${safeNum(ti.diMinus, 0)}`, ti.diPlus>ti.diMinus?'#0a6e3c':'#b83232'],
         ['Trend S/M/L', `${ti.trendShort}/${ti.trendMid}/${ti.trendLong}`],
         ['Consistency', `${ti.trendConsistency}%`, ti.trendConsistency>=66?'#0a6e3c':ti.trendConsistency<=33?'#b83232':'#b08000'],
         ['Golden/Death', ti.goldenCrossActive?'✅ Golden':ti.deathCrossActive?'❌ Death':'—', ti.goldenCrossActive?'#0a6e3c':ti.deathCrossActive?'#b83232':undefined],
@@ -273,13 +302,13 @@ function proPanel(rec: StockRecommendation): string {
       ${indRow([
         ['OBV', ti.obvTrend, obvCol],
         ['OBV Div', ti.obvDivergence!=='none'?ti.obvDivergence:'—', ti.obvDivergence==='bullish'?'#0a6e3c':ti.obvDivergence==='bearish'?'#b83232':undefined],
-        ['CMF', round(ti.chaikinMoneyFlow,3), cmfCol],
-        ['Vol Ratio', `${round(ti.volumeRatio)}×`, ti.volumeRatio>2?'#b08000':undefined],
+        ['CMF', safeNum(ti.chaikinMoneyFlow, 3), cmfCol],
+        ['Vol Ratio', `${safeNum(ti.volumeRatio, 1)}×`, ti.volumeRatio>2?'#b08000':undefined],
         ['Vol Signal', ti.volumeSignal.replace(/_/g,' ')],
-        ['ATR-14', `${round(ti.atr14)} (${round(ti.atrPct)}%)`],
-        ['HV-30', `${round(ti.historicalVolatility30d)}%`],
-        ['vs VWAP', `${round(ti.priceVsVwapPct)}%`, ti.priceVsVwapPct<-3?'#0a6e3c':ti.priceVsVwapPct>3?'#b83232':undefined],
-        ['vs 52wH', `${round(ti.priceVs52wHighPct)}%`],
+        ['ATR-14', `${safeNum(ti.atr14, 2)} (${safeNum(ti.atrPct, 1)}%)`],
+        ['HV-30', `${safeNum(ti.historicalVolatility30d, 1)}%`],
+        ['vs VWAP', `${safeNum(ti.priceVsVwapPct, 1)}%`, ti.priceVsVwapPct<-3?'#0a6e3c':ti.priceVsVwapPct>3?'#b83232':undefined],
+        ['vs 52wH', `${safeNum(ti.priceVs52wHighPct, 1)}%`],
         ['Candle', ti.candlestickPattern.replace(/_/g,' ')],
       ])}
     </div>
@@ -316,30 +345,30 @@ function proPanel(rec: StockRecommendation): string {
     <div style="font-size:10px;font-weight:700;color:#999;text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px">FUNDAMENTALS</div>
     <div style="display:flex;flex-wrap:wrap;gap:5px">
       ${indRow([
-        ['P/E TTM',    `${round(f.peRatioTtm)} / ${f.sectorAvgPe}`, f.peRatioTtm < f.sectorAvgPe*0.9 ? '#0a6e3c' : undefined],
-        ['P/E Fwd',    round(f.peRatioForward)],
-        ['P/B',        round(f.pbRatio), f.pbRatio<1?'#0a6e3c':undefined],
-        ['EV/EBITDA',  round(f.evEbitda)],
-        ['EPS TTM',    `₨${round(f.epsTtm)}`],
-        ['EPS Grw',    `${round(f.epsGrowthYoy)}%`, f.epsGrowthYoy>15?'#0a6e3c':f.epsGrowthYoy<0?'#b83232':undefined],
-        ['ROE',        `${round(f.roeTtm)}%`, f.roeTtm>20?'#0a6e3c':f.roeTtm<10?'#b83232':undefined],
-        ['ROIC',       `${round(f.roicTtm)}%`],
-        ['Net Margin', `${round(f.netProfitMarginPct)}%`],
-        ['Rev Grw',    `${round(f.revenueGrowthYoy)}%`, f.revenueGrowthYoy>15?'#0a6e3c':undefined],
+        ['P/E TTM',    `${safeNum(f.peRatioTtm)} / ${f.sectorAvgPe}`, f.peRatioTtm < f.sectorAvgPe*0.9 ? '#0a6e3c' : undefined],
+        ['P/E Fwd',    safeNum(f.peRatioForward)],
+        ['P/B',        safeNum(f.pbRatio), f.pbRatio<1?'#0a6e3c':undefined],
+        ['EV/EBITDA',  safeNum(f.evEbitda)],
+        ['EPS TTM',    `₨${safeNum(f.epsTtm)}`],
+        ['EPS Grw',    `${safeNum(f.epsGrowthYoy, 1)}%`, f.epsGrowthYoy>15?'#0a6e3c':f.epsGrowthYoy<0?'#b83232':undefined],
+        ['ROE',        `${safeNum(f.roeTtm, 1)}%`, f.roeTtm>20?'#0a6e3c':f.roeTtm<10?'#b83232':undefined],
+        ['ROIC',       `${safeNum(f.roicTtm, 1)}%`],
+        ['Net Margin', `${safeNum(f.netProfitMarginPct, 1)}%`],
+        ['Rev Grw',    `${safeNum(f.revenueGrowthYoy, 1)}%`, f.revenueGrowthYoy>15?'#0a6e3c':undefined],
       ])}
     </div>
     <div style="display:flex;flex-wrap:wrap;gap:5px;margin-top:5px">
       ${indRow([
-        ['Div Yield',  `${round(f.dividendYieldPct)}%`, f.dividendYieldPct>8?'#0a6e3c':undefined],
-        ['Div/Share',  `₨${round(f.dividendPerShare)}`],
-        ['Div Payout', `${round(f.dividendPayoutRatioPct)}%`],
+        ['Div Yield',  `${safeNum(f.dividendYieldPct, 1)}%`, f.dividendYieldPct>8?'#0a6e3c':undefined],
+        ['Div/Share',  `₨${safeNum(f.dividendPerShare)}`],
+        ['Div Payout', `${safeNum(f.dividendPayoutRatioPct, 0)}%`],
         ['Div Years',  f.consecutiveDividendYears, f.consecutiveDividendYears>=10?'#0a6e3c':undefined],
-        ['D/E',        round(f.debtToEquity), f.debtToEquity>1.5?'#b83232':f.debtToEquity<0.3?'#0a6e3c':undefined],
-        ['Curr Ratio', round(f.currentRatio), f.currentRatio<1?'#b83232':f.currentRatio>2?'#0a6e3c':undefined],
-        ['Int Cover',  `${round(f.interestCoverageRatio)}×`, f.interestCoverageRatio<2?'#b83232':f.interestCoverageRatio>8?'#0a6e3c':undefined],
-        ['ND/EBITDA',  round(f.netDebtToEbitda), f.netDebtToEbitda<0?'#0a6e3c':f.netDebtToEbitda>3?'#b83232':undefined],
-        ['FCF Yield',  `${round(f.freeCashFlowYield)}%`, f.freeCashFlowYield>7?'#0a6e3c':undefined],
-        ['Book/Sh',    `₨${round(f.bookValuePerShare)}`],
+        ['D/E',        safeNum(f.debtToEquity, 2), f.debtToEquity>1.5?'#b83232':f.debtToEquity<0.3?'#0a6e3c':undefined],
+        ['Curr Ratio', safeNum(f.currentRatio, 2), f.currentRatio<1?'#b83232':f.currentRatio>2?'#0a6e3c':undefined],
+        ['Int Cover',  `${safeNum(f.interestCoverageRatio, 1)}×`, f.interestCoverageRatio<2?'#b83232':f.interestCoverageRatio>8?'#0a6e3c':undefined],
+        ['ND/EBITDA',  safeNum(f.netDebtToEbitda, 2), f.netDebtToEbitda<0?'#0a6e3c':f.netDebtToEbitda>3?'#b83232':undefined],
+        ['FCF Yield',  `${safeNum(f.freeCashFlowYield, 1)}%`, f.freeCashFlowYield>7?'#0a6e3c':undefined],
+        ['Book/Sh',    `₨${safeNum(f.bookValuePerShare, 0)}`],
       ])}
     </div>
     ${f.upcomingDividendDate  ? `<div style="margin-top:5px;font-size:10px;color:#0a6e3c">📅 Dividend ex-date: <strong>${f.upcomingDividendDate}</strong></div>` : ''}
@@ -401,9 +430,9 @@ function buildHtml(output: RunOutput): string {
       ${notifSubject ? `<div style="font-size:11px;opacity:.5;margin-top:2px">${notifSubject}</div>` : ''}
     </div>
     <div style="text-align:right">
-      <div style="font-size:28px;font-weight:900">${formatPkrCompact(totalPortfolioValue)}</div>
+      <div style="font-size:28px;font-weight:900">${safePkr(totalPortfolioValue)}</div>
       <div style="font-size:12px;opacity:.7">Portfolio Value</div>
-      <div style="font-size:18px;font-weight:700;margin-top:4px;color:${totalUnrealisedPl>=0?'#7fe8b0':'#f99'}">${formatPct(totalUnrealisedPlPct)} &nbsp;<span style="font-size:13px">(${formatPkrCompact(totalUnrealisedPl)})</span></div>
+      <div style="font-size:18px;font-weight:700;margin-top:4px;color:${totalUnrealisedPl>=0?'#7fe8b0':'#f99'}">${safePct(totalUnrealisedPlPct)} &nbsp;<span style="font-size:13px">(${safePkr(totalUnrealisedPl)})</span></div>
       <div style="font-size:11px;opacity:.6">Unrealised P&L</div>
     </div>
   </div>
@@ -411,13 +440,13 @@ function buildHtml(output: RunOutput): string {
   <!-- Macro strip -->
   <div style="display:flex;flex-wrap:wrap;gap:14px;margin-top:18px;padding-top:16px;border-top:1px solid rgba(255,255,255,.15)">
     ${[
-      ['KSE-100', `${m.kse100Level.toLocaleString()}`, `${m.kse100ChangePct>=0?'▲':'▼'} ${formatPct(m.kse100ChangePct)}`],
+      ['KSE-100', `${m.kse100Level.toLocaleString()}`, `${m.kse100ChangePct>=0?'▲':'▼'} ${safePct(m.kse100ChangePct)}`],
       ['PKR/USD', m.pkrUsdOfficial, m.pkrTrend],
       ['SBP Rate', `${m.sbpPolicyRate}%`, m.sbpRateTrend],
       ['CPI', `${m.pakistanCpi}%`, ''],
       ['Brent', `$${m.brentCrude}`, ''],
       ['FPI/wk', `${m.fpiWeeklyMillion}M`, m.fpiDirection],
-      ['KSE YTD', formatPct(m.kse100Ytd), ''],
+      ['KSE YTD', safePct(m.kse100Ytd), ''],
     ].map(([l,v,s]) => `<div>
       <div style="font-size:9px;opacity:.5;margin-bottom:2px">${l}</div>
       <div style="font-size:14px;font-weight:700">${v}</div>
@@ -486,15 +515,15 @@ ${crit.map(a => `
       <td><strong>${r.ticker}</strong>${hasCrit?' 🚨':''}</td>
       <td style="color:#555;font-size:11px">${r.name}</td>
       <td style="text-align:right">${p?.shares.toLocaleString()??'—'}</td>
-      <td style="text-align:right">${p?`₨${p.avgCost}`:'—'}</td>
-      <td style="text-align:right"><strong>₨${r.currentPrice}</strong></td>
-      <td style="text-align:right;color:${plC(r.dayChangePct)};font-size:11px">${formatPct(r.dayChangePct,1)}</td>
-      <td style="text-align:right;color:${plC(p?.unrealisedPlPct??0)};font-weight:600">${p?formatPct(p.unrealisedPlPct):'—'}</td>
-      <td style="text-align:right;color:${plC(p?.unrealisedPlPkr??0)}">${p?formatPkrCompact(p.unrealisedPlPkr):'—'}</td>
+      <td style="text-align:right">${p?safePrice(p.avgCost):'—'}</td>
+      <td style="text-align:right"><strong>${safePrice(r.currentPrice)}</strong></td>
+      <td style="text-align:right;color:${plC(r.dayChangePct)};font-size:11px">${safePct(r.dayChangePct)}</td>
+      <td style="text-align:right;color:${plC(p?.unrealisedPlPct??0)};font-weight:600">${p?safePct(p.unrealisedPlPct):'—'}</td>
+      <td style="text-align:right;color:${plC(p?.unrealisedPlPkr??0)}">${p?safePkr(p.unrealisedPlPkr):'—'}</td>
       <td>${badge(r.signal)}</td>
-      <td style="color:#0a6e3c;font-weight:600;white-space:nowrap">₨${r.priceTargets.aggressiveBuyAt}</td>
-      <td style="color:#1a8a50;white-space:nowrap">₨${r.priceTargets.target1}</td>
-      <td style="color:#b83232;white-space:nowrap">₨${r.priceTargets.stopLoss}</td>
+      <td style="color:#0a6e3c;font-weight:600;white-space:nowrap">${safePrice(r.priceTargets.aggressiveBuyAt)}</td>
+      <td style="color:#1a8a50;white-space:nowrap">${safePrice(r.priceTargets.target1)}</td>
+      <td style="color:#b83232;white-space:nowrap">${safePrice(r.priceTargets.stopLoss)}</td>
       <td style="min-width:80px">${progressBar(r.compositeScore.composite,'','80px')}</td>
     </tr>`;
   }).join('')}
@@ -571,7 +600,7 @@ ${Object.entries(aiReview.sectorOutlook).map(([s,v])=>`
 // ─── Export ────────────────────────────────────────────────────────────────────
 
 export async function generatePdfReport(output: RunOutput): Promise<Buffer> {
-  logger.info('Generating PDF report');
+  logger.info('Building PDF report');
   const html = buildHtml(output);
 
   const browser = await puppeteer.launch({

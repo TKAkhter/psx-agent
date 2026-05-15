@@ -18,6 +18,7 @@ import { httpClient } from '../utils/http-client';
 import { CONFIG } from '../config';
 import { logger } from '../utils/logger';
 import { getCachedFundamentals, saveFundamentalsCache } from '../db/portfolio-repository';
+import { buildMarketDataFromPsx, scrapePsxFinancials } from './psx-scraper';
 import type { OHLCVCandle, TickerMarketData, FundamentalData, MacroSnapshot } from '../types';
 
 const PSX_BASE = 'https://api.psxterminal.com/v1';
@@ -140,14 +141,32 @@ const FUND_STUBS: Record<string, Partial<FundamentalData>> = {
 // ─── Public: fetch ticker market data ────────────────────────────────────────
 
 export async function fetchTickerData(ticker: string): Promise<TickerMarketData> {
-  // Try live API first
-  const live = await psx<{ data: TickerMarketData }>(`/timeseries/${ticker}`, { period:'1y', interval:'1d' });
-  if (live?.data) {
-    logger.debug({ ticker, source: 'live' }, 'Market data fetched');
-    return live.data;
+  const strategy = CONFIG.DATA_SOURCE;
+
+  // ── PSX Terminal API ────────────────────────────────────────────────────────
+  if (strategy === 'psxterminal' || strategy === 'auto') {
+    const live = await psx<{ data: TickerMarketData }>(`/timeseries/${ticker}`, { period:'1y', interval:'1d' });
+    if (live?.data) {
+      logger.debug({ ticker, source: 'psxterminal' }, 'Market data: PSX Terminal API');
+      return live.data;
+    }
   }
 
-  // Fall back to seeded mock (price-accurate)
+  // ── PSX.com.pk / DPS scraper ────────────────────────────────────────────────
+  if (strategy === 'psx_scraper' || strategy === 'auto') {
+    const scraped = await buildMarketDataFromPsx(ticker);
+    if (scraped && scraped.candles.length >= 20) {
+      logger.debug({ ticker, candles: scraped.candles.length, source: 'dps.psx.com.pk' }, 'Market data: PSX scraper');
+      return scraped;
+    }
+  }
+
+  // ── Deterministic stub (fallback or DATA_SOURCE=stub) ──────────────────────
+  if (strategy !== 'auto' && strategy !== 'stub' && strategy !== 'psx_scraper' && strategy !== 'psxterminal') {
+    logger.warn({ ticker, strategy }, 'Unknown DATA_SOURCE — using stub');
+  }
+  logger.debug({ ticker, source: 'stub' }, 'Market data: deterministic stub');
+  // Fall through to stub:
   const candles = generateCandles(ticker);
   const closes  = candles.map(c => c.close);
   const cp      = closes[closes.length - 1];
@@ -181,15 +200,63 @@ export async function fetchFundamentals(ticker: string): Promise<FundamentalData
     return cached as unknown as FundamentalData;
   }
 
-  // 2. Try live API
-  const live = await psx<{ data: FundamentalData }>(`/fundamentals/${ticker}`);
-  if (live?.data) {
-    await saveFundamentalsCache(ticker, live.data as unknown as Record<string, unknown>);
-    logger.debug({ ticker, source: 'live' }, 'Fundamentals fetched and cached');
-    return live.data;
+  // 2. PSX Terminal API
+  if (CONFIG.DATA_SOURCE === 'psxterminal' || CONFIG.DATA_SOURCE === 'auto') {
+    const live = await psx<{ data: FundamentalData }>(`/fundamentals/${ticker}`);
+    if (live?.data) {
+      await saveFundamentalsCache(ticker, live.data as unknown as Record<string, unknown>);
+      logger.debug({ ticker, source: 'psxterminal' }, 'Fundamentals: PSX Terminal API');
+      return live.data;
+    }
   }
 
-  // 3. Stub with small jitter so each run shows slight variation
+  // 3. PSX.com.pk scraper for real financials
+  const psxFin = CONFIG.DATA_SOURCE !== 'stub' ? await scrapePsxFinancials(ticker) : null;
+  if (psxFin) {
+    const stub = FUND_STUBS[ticker] ?? {};
+    const ps = (field: string, fallback: number) => {
+      const v = parseFloat(String((psxFin as Record<string,unknown>)[field] ?? 0));
+      return (v > 0 && isFinite(v)) ? v : fallback;
+    };
+    const partial: FundamentalData = {
+      ticker,
+      peRatioTtm:              ps('PE', stub.peRatioTtm ?? 8),
+      peRatioForward:          stub.peRatioForward ?? ps('PE', 8) * 0.9,
+      pbRatio:                 ps('P_B', stub.pbRatio ?? 1.5),
+      psRatio:                 1.5,
+      evEbitda:                6.0,
+      sectorAvgPe:             stub.sectorAvgPe ?? 8,
+      epsTtm:                  ps('EPS', stub.epsTtm ?? 20),
+      epsGrowthYoy:            stub.epsGrowthYoy ?? 10,
+      roeTtm:                  stub.roeTtm ?? 15,
+      roaTtm:                  stub.roaTtm ?? 5,
+      roicTtm:                 stub.roicTtm ?? 12,
+      grossMarginPct:          stub.grossMarginPct ?? 25,
+      netProfitMarginPct:      stub.netProfitMarginPct ?? 12,
+      ebitdaMarginPct:         stub.ebitdaMarginPct ?? 18,
+      revenueGrowthYoy:        stub.revenueGrowthYoy ?? 8,
+      revenueGrowthQoq:        stub.revenueGrowthQoq ?? 2,
+      earningsGrowthYoy:       stub.earningsGrowthYoy ?? 8,
+      dividendYieldPct:        stub.dividendYieldPct ?? 5,
+      dividendPerShare:        ps('DPS', stub.dividendPerShare ?? 10),
+      dividendPayoutRatioPct:  stub.dividendPayoutRatioPct ?? 40,
+      consecutiveDividendYears: stub.consecutiveDividendYears ?? 5,
+      debtToEquity:            stub.debtToEquity ?? 0.5,
+      currentRatio:            stub.currentRatio ?? 1.5,
+      quickRatio:              stub.quickRatio ?? 1.2,
+      interestCoverageRatio:   stub.interestCoverageRatio ?? 5,
+      netDebtToEbitda:         stub.netDebtToEbitda ?? 0.5,
+      freeCashFlowYield:       stub.freeCashFlowYield ?? 4,
+      operatingCashFlowGrowth: stub.operatingCashFlowGrowth ?? 8,
+      bookValuePerShare:       ps('BOOK_VALUE', stub.bookValuePerShare ?? 100),
+      priceToBookDiscount:     stub.priceToBookDiscount ?? -30,
+    };
+    await saveFundamentalsCache(ticker, partial as unknown as Record<string, unknown>);
+    logger.debug({ ticker, source: 'dps.psx.com.pk' }, 'Fundamentals: PSX scraper');
+    return partial;
+  }
+
+  // 4. Stub with small jitter so each run shows slight variation
   const stub = FUND_STUBS[ticker];
   const j = (b: number, sp = 0.06) => parseFloat((b * (1 - sp/2 + Math.abs(Math.sin(Date.now()/86400000 + b)) * sp)).toFixed(2));
   const seed = ticker.charCodeAt(0);

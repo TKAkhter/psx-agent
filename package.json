@@ -1,6 +1,6 @@
 {
   "name": "psx-analyzer",
-  "version": "4.0.0",
+  "version": "5.0.0",
   "description": "AI-powered PSX portfolio analysis system",
   "main": "dist/index.js",
   "scripts": {
@@ -17,7 +17,6 @@
     "axios-retry": "^4.0.0",
     "date-fns": "^3.3.1",
     "dotenv": "^16.4.1",
-    "form-data": "^4.0.0",
     "joi": "^17.12.1",
     "nodemailer": "^6.9.9",
     "openai": "^4.28.0",
@@ -28,15 +27,16 @@
     "puppeteer": "^22.4.0",
     "rss-parser": "^3.13.0",
     "technicalindicators": "^3.1.0",
-    "uuid": "^9.0.0"
+    "uuid": "^9.0.0",
+    "form-data": "^4.0.0"
   },
   "devDependencies": {
-    "@types/form-data": "^2.5.0",
     "@types/node": "^20.11.5",
     "@types/nodemailer": "^6.4.14",
     "@types/uuid": "^9.0.7",
     "prisma": "^5.10.0",
     "ts-node": "^10.9.2",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "@types/form-data": "^2.5.0"
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "psx-agent",
-  "version": "6.0.0",
+  "version": "7.0.0",
   "description": "PSX Trading Agent — TypeScript, PSXTerminal, Gemini AI, Green API WhatsApp, PDF Reports",
   "main": "dist/index.js",
   "scripts": {
@@ -10,7 +10,7 @@
     "clean":  "rm -rf dist reports"
   },
   "author": "",
-  "license": "ISC",
+  "engines": { "node": ">=20.0.0" },
   "dependencies": {
     "axios":           "^1.7.9",
     "dotenv":          "^17.4.1",

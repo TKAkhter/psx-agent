@@ -1,15 +1,13 @@
 // =============================================================
-//  types.ts  —  ALL shared types in one place
-//  Import from here everywhere. No type definitions elsewhere
-//  (except local private interfaces that don't cross file boundaries).
+//  types.ts  —  ALL shared types. Import only from here.
 // =============================================================
-
-// ─────────────────────────────────────────────────────────────
-//  CONFIG / ENV
-// ─────────────────────────────────────────────────────────────
 
 export type PortfolioType = "psx" | "yahoo";
 export type EmailTheme    = "dark" | "light";
+
+// ─────────────────────────────────────────────────────────────
+//  PORTFOLIO / POSITION
+// ─────────────────────────────────────────────────────────────
 
 export interface PortfolioEntry {
   symbol:  string;
@@ -57,8 +55,8 @@ export interface BollingerResult {
   lower:     number;
   mid:       number;
   bandwidth: number;
-  pctB:      number;   // 0 = at lower band, 100 = at upper band
-  squeeze:   boolean;  // bandwidth < 4%
+  pctB:      number;   // 0=at lower, 100=at upper
+  squeeze:   boolean;
 }
 
 export interface StochasticResult {
@@ -112,7 +110,7 @@ export interface SuperTrendResult {
   value:     number;
   signal:    "BUY" | "SELL";
   direction: 1 | -1;
-  distance:  number;   // % price is from SuperTrend line
+  distance:  number;
   isBull:    boolean;
 }
 
@@ -134,7 +132,8 @@ export interface PerfStats {
   maxDrawdown:   number;
 }
 
-export type TrendLabel = "STRONG_BULL" | "BULL" | "SIDEWAYS" | "BEAR" | "STRONG_BEAR" | "UNKNOWN";
+export type TrendLabel   = "STRONG_BULL" | "BULL" | "SIDEWAYS" | "BEAR" | "STRONG_BEAR" | "UNKNOWN";
+export type MarketRegime = "TRENDING_BULL" | "TRENDING_BEAR" | "RANGING" | "BREAKOUT" | "BREAKDOWN";
 
 // ─────────────────────────────────────────────────────────────
 //  FETCH / STOCK DATA
@@ -146,9 +145,9 @@ export interface Fundamentals {
   marketCap?:     string | null;
   yearChange?:    number | null;
   volume30Avg?:   number | null;
-  eps?:           number | null;          // Earnings per share
-  bookValue?:     number | null;          // Book value per share
-  pbRatio?:       number | null;          // Price-to-book ratio
+  eps?:           number | null;
+  bookValue?:     number | null;
+  pbRatio?:       number | null;
 }
 
 export interface DividendRecord {
@@ -160,7 +159,7 @@ export interface DividendRecord {
 export interface LiveTick {
   price:     number;
   change:    number;
-  changePct: number;
+  changePct: number;   // already in % e.g. 1.93 means +1.93%
   volume:    number;
   trades:    number;
   high:      number;
@@ -170,74 +169,89 @@ export interface LiveTick {
   value:     number;
 }
 
+// Historical price trend from MongoDB (previous sessions)
+export interface HistoricalTrend {
+  symbol:        string;
+  prevPrice:     number;       // price at last session
+  priceChange7d: number | null; // % change over last 7 sessions
+  avgScore7d:    number | null; // average algo score over 7 sessions
+  prevAction:    string;       // last session's signal action
+  sessions:      number;       // how many sessions tracked
+}
+
+// KSE-100 top movers from market-wide data
+export interface KseTopMover {
+  symbol:    string;
+  name:      string;
+  price:     number;
+  changePct: number;
+  volume:    number;
+  sector:    string;
+}
+
+// Market-wide overview (beyond just portfolio stocks)
+export interface MarketOverview {
+  kse100:        { level: number; change: number; changePct: number; volume: number } | null;
+  breadth:       { advances: number; declines: number; unchanged: number; adRatio: number; upVolume: number; downVolume: number } | null;
+  topGainers:    KseTopMover[];
+  topLosers:     KseTopMover[];
+  topVolume:     KseTopMover[];
+  sectorSummary: Record<string, { avg: number; count: number }>; // sector → avg changePct
+}
+
 export interface StockData extends PerfStats {
-  // Identity
   symbol:      string;
   name:        string;
   sector:      string;
   shares:      number;
   avgCost:     number;
-  // OHLCV (live-merged)
   price:       number;
   open:        number;
   high:        number;
   low:         number;
   volume:      number;
-  // Live tick extras
   change:      number | null;
   changePct:   number | null;
   bid:         number | null;
   ask:         number | null;
   trades:      number | null;
-  // Moving averages
-  ma5:         number | null;
-  ma10:        number | null;
-  ma20:        number | null;
-  ma50:        number | null;
-  ma200:       number | null;
-  ema9:        number | null;
-  ema21:       number | null;
-  // Oscillators
-  rsi14:       number | null;
-  rsi9:        number | null;
-  macd:        MacdResult;
-  bb:          BollingerResult | null;
-  stoch:       StochasticResult;
-  willR:       number | null;
-  cci:         number | null;
-  roc:         number | null;
-  mfi:         number | null;
-  // Trend & strength
-  atr:         number | null;
-  adx:         AdxResult;
-  ichi:        IchimokuResult | null;
-  superTrend:  SuperTrendResult | null;
-  trend:       TrendLabel;
-  // Market regime (new)
-  marketRegime: "TRENDING_BULL" | "TRENDING_BEAR" | "RANGING" | "BREAKOUT" | "BREAKDOWN";
-  // VWAP deviation %
-  vwapDevPct:  number | null;  // % price deviates from VWAP
-  // Flow
-  vol:         VolumeMetrics;
-  obv:         ObvResult;
-  vwap:        number | null;
-  // Levels & patterns
-  pivots:      PivotResult | null;
-  patterns:    CandlePattern[];
-  divergence:  "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | null;
-  // Visual
-  sparkline:   string;
-  // P&L
+  ma5:  number | null; ma10: number | null; ma20: number | null;
+  ma50: number | null; ma200: number | null;
+  ema9: number | null; ema21: number | null;
+  rsi14:      number | null;
+  rsi9:       number | null;
+  macd:       MacdResult;
+  bb:         BollingerResult | null;
+  stoch:      StochasticResult;
+  willR:      number | null;
+  cci:        number | null;
+  roc:        number | null;
+  mfi:        number | null;
+  atr:        number | null;
+  adx:        AdxResult;
+  ichi:       IchimokuResult | null;
+  superTrend: SuperTrendResult | null;
+  trend:      TrendLabel;
+  marketRegime: MarketRegime;
+  vwapDevPct: number | null;
+  vol:        VolumeMetrics;
+  obv:        ObvResult;
+  vwap:       number | null;
+  pivots:     PivotResult | null;
+  patterns:   CandlePattern[];
+  divergence: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | null;
+  sparkline:  string;
   costBasis:     number;
   marketValue:   number;
   unrealizedPnl: number;
   unrealizedPct: number | null;
-  // Enrichment
   fundamentals:  Fundamentals;
   dividends:     DividendRecord[];
   dataSource:    string;
   historyBars:   number;
-  error?:        never;
+  // Historical trend from DB (injected after fetch)
+  historicalTrend?: HistoricalTrend | null;
+  error?: never;
 }
 
 export interface StockError {
@@ -257,8 +271,6 @@ export interface MarketContext {
   breadth: { advances: number; declines: number; unchanged: number; adRatio: number; upVolume: number; downVolume: number } | null;
 }
 
-// StockDataMap keyed by ticker. __market__ is the sentinel via intersection
-// to avoid TS2411 "not assignable to string index type" error.
 export type StockDataMap = Record<string, StockResult> & { __market__?: MarketContext };
 
 // ─────────────────────────────────────────────────────────────
@@ -269,12 +281,10 @@ export type ActionLabel = "STRONG_BUY" | "BUY" | "HOLD" | "SELL" | "STRONG_SELL"
 export type Confidence  = "Very High" | "High" | "Medium" | "Low";
 
 export interface TradeSignal {
-  // Identity
   symbol:      string;
   action:      ActionLabel;
   score:       number;
   confidence:  Confidence;
-  // Price levels
   limitPrice:  number | null;
   targetPrice: number | null;
   stopLoss:    number | null;
@@ -282,15 +292,12 @@ export interface TradeSignal {
   rrRatio:     number | null;
   potentialGain: number;
   maxRisk:       number;
-  // Human-readable
   instruction:   string;
   beginnerNote:  string;
   proSummary:    string;
-  // Algo reasoning
   bullReasons:   string[];
   bearReasons:   string[];
   neutralNotes:  string[];
-  // Key indicator snapshots (mirrors StockData)
   price:       number;
   open:        number | null;
   high:        number | null;
@@ -298,45 +305,33 @@ export interface TradeSignal {
   changePct:   number | null;
   bid:         number | null;
   ask:         number | null;
-  rsi14:       number | null;
-  rsi9:        number | null;
-  mfi:         number | null;
-  roc:         number | null;
-  stoch:       StochasticResult;
-  macd:        MacdResult;
-  bb:          BollingerResult | null;
-  adx:         AdxResult;
-  willR:       number | null;
-  cci:         number | null;
-  ichi:        IchimokuResult | null;
-  superTrend:  SuperTrendResult | null;
-  vwap:        number | null;
-  vwapDevPct:  number | null;
-  obv:         ObvResult;
-  pivots:      PivotResult | null;
-  trend:       TrendLabel;
-  marketRegime: StockData["marketRegime"];
-  vol:         VolumeMetrics;
-  patterns:    CandlePattern[];
-  divergence:  "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | null;
-  sparkline:   string;
-  // MAs
-  ma5: number | null; ma10: number | null; ma20: number | null;
+  rsi14:  number | null; rsi9:  number | null;
+  mfi:    number | null; roc:   number | null;
+  stoch:  StochasticResult; macd: MacdResult;
+  bb:     BollingerResult | null; adx: AdxResult;
+  willR:  number | null; cci:  number | null;
+  ichi:   IchimokuResult | null;
+  superTrend: SuperTrendResult | null;
+  vwap:       number | null; vwapDevPct: number | null;
+  obv:        ObvResult; pivots: PivotResult | null;
+  trend:      TrendLabel; marketRegime: MarketRegime;
+  vol:        VolumeMetrics; patterns: CandlePattern[];
+  divergence: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | null;
+  sparkline:  string;
+  ma5:  number | null; ma10: number | null; ma20: number | null;
   ma50: number | null; ma200: number | null;
   ema9: number | null; ema21: number | null;
-  // P&L
   unrealizedPnl: number; unrealizedPct: number | null;
   marketValue: number;   costBasis: number;
   shares: number;        avgCost: number;
-  // Performance
   perf1d: number | null; perf1w: number | null;
   perf1m: number | null; perf6m: number | null;
   high6m: number;        low6m: number;
   maxDrawdown: number;
   pctFrom6mHigh: number | null; pctFrom6mLow: number | null;
-  // Fundamentals snapshot
   fundamentals: Fundamentals;
   dividends:    DividendRecord[];
+  historicalTrend?: HistoricalTrend | null;
 }
 
 export interface SkipSignal {
@@ -347,8 +342,8 @@ export interface SkipSignal {
   price:   null;
 }
 
-export type Signal        = TradeSignal | SkipSignal;
-export type SignalMap     = Record<string, Signal>;
+export type Signal         = TradeSignal | SkipSignal;
+export type SignalMap      = Record<string, Signal>;
 export type TradeSignalMap = SignalMap;
 
 export interface PortfolioSummary {
@@ -357,7 +352,6 @@ export interface PortfolioSummary {
   totalPnl:       number;
   totalPnlPct:    number;
   sectorWeights:  Record<string, number>;
-  // General market summary (from MarketContext)
   marketContext?: MarketContext | null;
 }
 
@@ -418,6 +412,7 @@ export interface MarketIntelligence {
   sector_outlook: Record<string, string>;
   overall_stance: string | null;
   today_headline: string | null;
+  general_market_analysis?: string;
   raw?:           string;
 }
 
@@ -435,8 +430,10 @@ export interface ValidationEntry {
   beginner_explanation: string;
   entry_zone:           string | null;
   exit_zone:            string | null;
-  // New: if action is SELL, Gemini recommends alternative buys
+  // SELL signals: suggest portfolio holdings to buy instead
   alt_buy_suggestions:  string[] | null;
+  // Price trend context from DB
+  trend_note:           string | null;
 }
 
 export interface PortfolioHealth {
@@ -448,20 +445,20 @@ export interface PortfolioHealth {
 }
 
 export interface SignalAnalysis {
-  portfolio_health: PortfolioHealth;
-  validation:       ValidationEntry[];
-  macro_impact:     string;
-  top_trade_today:  string;
-  avoid_today:      string | null;
-  daily_tip:        string;
-  emotional_state:  string;
-  overall_stance:   string;
-  // New: general market analysis separate from portfolio
-  market_analysis:          string;
-  general_market_analysis:  string;  // alias populated by gemini.ts
-  // New: sector rotation recommendation
-  sector_rotation:  string | null;
-  raw?:             string;
+  portfolio_health:        PortfolioHealth;
+  validation:              ValidationEntry[];
+  macro_impact:            string;
+  general_market_analysis: string;
+  market_analysis:         string;
+  top_trade_today:         string;
+  avoid_today:             string | null;
+  daily_tip:               string;
+  emotional_state:         string;
+  overall_stance:          string;
+  sector_rotation:         string | null;
+  // Market-wide insight (for analyst role beyond portfolio)
+  market_wide_insight:     string;
+  raw?:                    string;
 }
 
 export interface WeeklyReview {
@@ -485,11 +482,13 @@ export interface GeminiInsight {
 // ─────────────────────────────────────────────────────────────
 
 export interface ReportData {
-  stockData:   StockDataMap;
-  signals:     TradeSignalMap;
-  summary:     PortfolioSummary;
-  performance: PerformanceResult | null;
-  gemini:      GeminiInsight | null;
-  timeStamp:   string;
-  sessionHour: number;
+  stockData:    StockDataMap;
+  signals:      TradeSignalMap;
+  summary:      PortfolioSummary;
+  performance:  PerformanceResult | null;
+  gemini:       GeminiInsight | null;
+  timeStamp:    string;
+  sessionHour:  number;
+  marketOverview?: MarketOverview | null;
+  historicalTrends?: HistoricalTrend[];
 }

@@ -16,7 +16,7 @@ import { ENV } from "../config";
 //  API docs: https://green-api.com/en/docs/api/sending/SendFileByUpload/
 // ─────────────────────────────────────────────────────────────
 
-const BASE_URL = "https://7107.api.greenapi.com";
+const BASE_URL = process.env.GREEN_API_URL ?? "https://7107.api.greenapi.com";
 
 function buildApiUrl(method: string): string {
   return `${BASE_URL}/waInstance${ENV.WHATSAPP_INSTANCE_ID}/${method}/${ENV.WHATSAPP_TOKEN}`;

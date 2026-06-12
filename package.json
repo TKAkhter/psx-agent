@@ -1,6 +1,6 @@
 {
   "name": "psx-agent",
-  "version": "7.0.0",
+  "version": "8.0.0",
   "description": "PSX Trading Agent — TypeScript, PSXTerminal, Gemini AI, Green API WhatsApp, PDF Reports",
   "main": "dist/index.js",
   "scripts": {

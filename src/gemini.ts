@@ -50,7 +50,6 @@ async function geminiCall(prompt: string, maxTokens: number, useSearch: boolean)
     generationConfig: {
       temperature:      0.1,
       maxOutputTokens:  maxTokens,
-      responseMimeType: "application/json",
     },
   };
   if (useSearch) body.tools = [{ googleSearch: {} }];

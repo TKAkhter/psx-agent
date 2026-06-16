@@ -134,9 +134,9 @@ async function fetchPsxKlines(symbol: string): Promise<OhlcvBar[]> {
     try {
       const startMs = Date.now() - 29 * 24 * 60 * 60 * 1000;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const d: any   = await psxGet(`/api/klines/${symbol}/1d?start=${startMs}&limit=200`);
+      const d: any   = await psxGet(`/api/klines/${symbol}/1d?start=${startMs}&limit=100`);
       const rows     = Array.isArray(d) ? d : (d?.data ?? d?.klines ?? []);
-      if (!Array.isArray(rows) || rows.length < 20) throw new Error(`PSX: ${rows.length} bars`);
+      if (!Array.isArray(rows) || rows.length < 10) throw new Error(`PSX: ${rows.length} bars`);
       const bars: OhlcvBar[] = rows.map((bar: Record<string, unknown>) => ({
         date:   bar.timestamp ? new Date(Number(bar.timestamp)).toISOString().slice(0, 10) : String(bar.date ?? ""),
         open:   Number(bar.open  ?? bar.o ?? 0),
@@ -385,7 +385,7 @@ export async function fetchAllStocks(
       const chg = data.changePct != null ? (data.changePct >= 0 ? `+${data.changePct}%` : `${data.changePct}%`) : "n/a";
       const st  = data.superTrend ? `ST:${data.superTrend.signal}` : "      ";
       const ht  = trend?.priceChange7d != null ? `[7d:${trend.priceChange7d >= 0 ? "+" : ""}${trend.priceChange7d}%]` : "";
-      console.log(`    ✓ ${symbol.padEnd(7)} PKR ${String(data.price).padStart(8)}  ${chg.padEnd(9)} RSI:${String(data.rsi14 ?? "—").padEnd(5)} MFI:${String(data.mfi ?? "—").padEnd(5)} ${st.padEnd(9)} ${data.trend.padEnd(13)} ${data.dataSource} ${ht}`);
+      console.log(`    ✓ ${symbol.padEnd(7)} PKR ${String(data.price ?? data.open).padStart(8)}  ${chg.padEnd(9)} RSI:${String(data.rsi14 ?? "—").padEnd(5)} MFI:${String(data.mfi ?? "—").padEnd(5)} ${st.padEnd(9)} ${data.trend.padEnd(13)} ${data.dataSource} ${ht}`);
     } catch (err) {
       (stockData as Record<string, StockResult>)[symbol] = {
         symbol: info.symbol, name: info.name, sector: info.sector,

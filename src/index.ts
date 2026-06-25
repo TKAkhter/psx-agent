@@ -2,13 +2,12 @@ import moment from "moment-timezone";
 import * as db from "./db";
 import { loadPortfolio, buildPortfolioMap } from "./portfolio";
 import { fetchAllStocks } from "./fetch-data";
-import { getSignals, calcPortfolioSummary, TradeSignalMap } from "./signals";
+import { getSignals, calcPortfolioSummary, TradeSignalMap, TradeSignal } from "./signals";
 import { getGeminiInsight } from "./gemini";
 import { evaluatePerformance, saveSession } from "./performance";
-import { buildHtmlEmail } from "./templates/email-template";
-import { buildWhatsAppMessage } from "./templates/whatsapp-template";
+import { generateReportPdf } from "./pdf-generator";
 import { sendEmail } from "./notify/email";
-import { sendWhatsApp } from "./notify/whatsapp";
+import { sendWhatsAppPdf, sendWhatsAppText } from "./notify/whatsapp";
 import { ENV } from "./config";
 
 // ─────────────────────────────────────────────────────────────
@@ -32,6 +31,38 @@ const DASH = "─".repeat(58);
 const step = (n: number, label: string) =>
   console.log(`\n${DASH}\n  ${n}/7 — ${label}`);
 const head = (label: string) => console.log(`\n${LINE}\n  ${label}\n${LINE}`);
+
+// ─────────────────────────────────────────────────────────────
+//  BRIEF SUMMARY TEXT  (email body / WhatsApp caption — the full
+//  report lives in the attached PDF, this is just a short preview)
+// ─────────────────────────────────────────────────────────────
+
+function buildBriefSummary(
+  signals: TradeSignalMap,
+  summary: ReturnType<typeof calcPortfolioSummary>,
+  timeStamp: string
+): string {
+  const pnlUp = (summary.totalPnl ?? 0) >= 0;
+  const sign = pnlUp ? "+" : "";
+  let txt = `PSX Trading Report — ${timeStamp}\n\n`;
+  txt += `Portfolio Value: PKR ${(summary.totalValue ?? 0).toLocaleString()}\n`;
+  txt += `P&L: ${sign}PKR ${(summary.totalPnl ?? 0).toLocaleString()} (${sign}${summary.totalPnlPct}%)\n\n`;
+
+  const actionable = Object.entries(signals).filter(
+    ([, s]) => s.action !== "SKIP" && s.action !== "HOLD"
+  ) as [string, TradeSignal][];
+
+  if (actionable.length) {
+    txt += "Today's Signals:\n";
+    for (const [sym, s] of actionable) {
+      txt += `  ${s.action.replace("_", " ")} ${sym} @ PKR ${s.limitPrice} (target ${s.targetPrice}, stop ${s.stopLoss})\n`;
+    }
+  } else {
+    txt += "No BUY/SELL signals today — all positions HOLD.\n";
+  }
+  txt += "\nFull analysis, AI insights, and charts in the attached PDF.";
+  return txt;
+}
 
 // ─────────────────────────────────────────────────────────────
 //  CONSOLE SIGNAL SUMMARY
@@ -233,9 +264,9 @@ async function main(): Promise<void> {
         : "  ⚠ Phase 3 failed"
     );
 
-  // ── 7. Build & Send ───────────────────────────────────────
-  step(7, "Building & sending");
-  const htmlEmail = buildHtmlEmail(
+  // ── 7. Build PDF & Send ────────────────────────────────────
+  step(7, "Generating PDF & sending");
+  const pdfBuffer = await generateReportPdf(
     stockData,
     signals,
     summary,
@@ -243,28 +274,32 @@ async function main(): Promise<void> {
     gemini,
     timeStamp
   );
-  const waMsg = buildWhatsAppMessage(
-    stockData,
-    signals,
-    summary,
-    gemini,
-    performance,
-    timeStamp
-  );
+  console.log(`  ✓ PDF generated in memory (${(pdfBuffer.length / 1024).toFixed(0)} KB, not written to disk)`);
+
+  const briefSummary = buildBriefSummary(signals, summary, timeStamp);
+  const pdfFileName = `PSX-Report-${timeStamp.replace(/[,:\s]+/g, "-")}.pdf`;
 
   const totalBuys = counts.STRONG_BUY + counts.BUY;
   const totalSells = counts.SELL + counts.STRONG_SELL;
   const pnlSign = (summary.totalPnlPct ?? 0) >= 0 ? "+" : "";
   const subject = `PSX ${timeStamp} · ${totalBuys}B/${totalSells}S · P&L ${pnlSign}${summary.totalPnlPct}%`;
 
-  const [emailRes, waRes] = await Promise.allSettled([
-    sendEmail(subject, htmlEmail, waMsg),
-    sendWhatsApp(waMsg),
+  const [emailRes, waPdfRes] = await Promise.allSettled([
+    sendEmail(subject, briefSummary, pdfBuffer, pdfFileName),
+    sendWhatsAppPdf(pdfBuffer, pdfFileName, briefSummary.slice(0, 1000)),
   ]);
   if (emailRes.status === "rejected")
     console.error(`  ✗ Email: ${(emailRes.reason as Error).message}`);
-  if (waRes.status === "rejected")
-    console.error(`  ✗ WhatsApp: ${(waRes.reason as Error).message}`);
+  if (waPdfRes.status === "rejected") {
+    console.error(`  ✗ WhatsApp PDF: ${(waPdfRes.reason as Error).message}`);
+    // Fallback: send brief text so the user isn't left with nothing
+    try {
+      await sendWhatsAppText(briefSummary);
+      console.log("  ✓ WhatsApp fallback text sent (PDF upload failed)");
+    } catch (err) {
+      console.error(`  ✗ WhatsApp fallback text: ${(err as Error).message}`);
+    }
+  }
 
   try {
     await saveSession(

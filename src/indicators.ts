@@ -1,125 +1,19 @@
 // ─────────────────────────────────────────────────────────────
-//  SHARED TYPES
+//  TYPES  (re-exported for backward compatibility;
+//          source of truth is now src/types.ts)
 // ─────────────────────────────────────────────────────────────
 
-export interface OhlcvBar {
-  date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-}
+export type {
+  OhlcvBar, MacdResult, BollingerResult, StochasticResult, AdxResult,
+  ObvResult, VolumeMetrics, IchimokuResult, PivotResult, SuperTrendResult,
+  CandlePattern, PerfStats, TrendLabel,
+} from "./types";
 
-export interface MacdResult {
-  macd: number | null;
-  signal: number | null;
-  histogram: number | null;
-  prevHistogram: number | null;
-  crossover: "BULLISH_CROSS" | "BEARISH_CROSS" | null;
-  histTrend: "EXPANDING" | "CONTRACTING" | null;
-}
-
-export interface BollingerResult {
-  upper: number;
-  lower: number;
-  mid: number;
-  bandwidth: number;
-  pctB: number; // 0 = at lower, 100 = at upper
-  squeeze: boolean; // bandwidth < 4%
-}
-
-export interface StochasticResult {
-  k: number | null;
-  d: number | null;
-  zone: "OVERSOLD" | "OVERBOUGHT" | "NEUTRAL" | null;
-  kCrossD: "BULLISH" | "BEARISH" | null;
-}
-
-export interface AdxResult {
-  adx: number | null;
-  diPlus: number | null;
-  diMinus: number | null;
-  strength:
-    | "VERY_STRONG"
-    | "STRONG_BULL"
-    | "STRONG_BEAR"
-    | "WEAK_BULL"
-    | "WEAK_BEAR"
-    | "RANGING"
-    | null;
-}
-
-export interface ObvResult {
-  value: number;
-  trend: "ACCUMULATION" | "DISTRIBUTION" | "NEUTRAL";
-  slopeScore: number;
-}
-
-export interface VolumeMetrics {
-  current: number;
-  avg20: number | null;
-  avg5: number | null;
-  volRatio: number | null;
-  volSpike: boolean;
-  volTrend: "INCREASING" | "DECREASING" | "STABLE";
-}
-
-export interface IchimokuResult {
-  tenkan: number;
-  kijun: number;
-  senkouA: number;
-  senkouB: number;
-  position: "ABOVE_CLOUD" | "BELOW_CLOUD" | "IN_CLOUD";
-  tkBullish: boolean;
-  cloudColor: "GREEN" | "RED";
-  chikouBullish: boolean | null;
-  distanceToCloud: number;
-}
-
-export interface PivotResult {
-  r3: number;
-  r2: number;
-  r1: number;
-  pivot: number;
-  s1: number;
-  s2: number;
-  s3: number;
-}
-
-export interface SuperTrendResult {
-  value: number;
-  signal: "BUY" | "SELL";
-  direction: 1 | -1;
-  distance: number;
-  isBull: boolean;
-}
-
-export interface CandlePattern {
-  name: string;
-  bias: "BULLISH" | "BEARISH" | "NEUTRAL";
-  desc: string;
-}
-
-export interface PerfStats {
-  high6m: number;
-  low6m: number;
-  pctFrom6mHigh: number | null;
-  pctFrom6mLow: number | null;
-  perf6m: number | null;
-  perf1m: number | null;
-  perf1w: number | null;
-  perf1d: number | null;
-  maxDrawdown: number;
-}
-
-export type TrendLabel =
-  | "STRONG_BULL"
-  | "BULL"
-  | "SIDEWAYS"
-  | "BEAR"
-  | "STRONG_BEAR"
-  | "UNKNOWN";
+import type {
+  OhlcvBar, MacdResult, BollingerResult, StochasticResult, AdxResult,
+  ObvResult, VolumeMetrics, IchimokuResult, PivotResult, SuperTrendResult,
+  CandlePattern, PerfStats, TrendLabel,
+} from "./types";
 
 // ─────────────────────────────────────────────────────────────
 //  MATH UTILITIES
@@ -640,16 +534,39 @@ export function detectDivergence(
 ): "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | null {
   if (!close || close.length < 20 || !rsiSeries || rsiSeries.length < 20)
     return null;
+
+  // We need at least 2 comparable price/RSI points.
+  // Strategy: find the prior swing low/high in the lookback window
+  // (bars -20 to -5) and compare it to the current bar (-1).
+  // Using a 5-bar buffer before "recent" avoids comparing the bar to itself.
+  const LOOKBACK = 20;
+  const BUFFER   = 5; // don't let "prior" overlap with "recent"
+
+  const closeLB  = close.slice(-LOOKBACK, -BUFFER);
+  const rsiLB    = rsiSeries.slice(-LOOKBACK, -BUFFER);
+  if (closeLB.length < 3 || rsiLB.length < 3) return null;
+
   const priceRecent = close.at(-1)!;
-  const pricePrev = Math.min(...close.slice(-20, -1));
-  const rsiRecent = rsiSeries.at(-1)!;
-  const rsiPrev = rsiSeries[rsiSeries.length - 20] ?? rsiSeries[0];
-  if (priceRecent < pricePrev && rsiRecent > rsiPrev)
+  const rsiRecent   = rsiSeries.at(-1)!;
+
+  // ── Bullish divergence: price makes lower low vs prior swing low
+  //    but RSI makes higher low → buyers absorbing the sell-off.
+  const priorLowPrice = Math.min(...closeLB);
+  const priorLowIdx   = closeLB.indexOf(priorLowPrice);
+  const priorLowRsi   = rsiLB[priorLowIdx] ?? Math.min(...rsiLB);
+
+  if (priceRecent < priorLowPrice && rsiRecent > priorLowRsi)
     return "BULLISH_DIVERGENCE";
-  const priceHigh = Math.max(...close.slice(-20, -1));
-  const rsiHigh = Math.max(...rsiSeries.slice(-20, -1));
-  if (priceRecent > priceHigh && rsiRecent < rsiHigh)
+
+  // ── Bearish divergence: price makes higher high vs prior swing high
+  //    but RSI makes lower high → momentum fading on new highs.
+  const priorHighPrice = Math.max(...closeLB);
+  const priorHighIdx   = closeLB.indexOf(priorHighPrice);
+  const priorHighRsi   = rsiLB[priorHighIdx] ?? Math.max(...rsiLB);
+
+  if (priceRecent > priorHighPrice && rsiRecent < priorHighRsi)
     return "BEARISH_DIVERGENCE";
+
   return null;
 }
 

@@ -1,11 +1,11 @@
 import "dotenv/config";
+import type { PortfolioType, EmailTheme, PortfolioEntry } from "./types";
+
+export type { PortfolioType, EmailTheme, PortfolioEntry } from "./types";
 
 // ─────────────────────────────────────────────────────────────
-//  TYPES
+//  CONFIG-SPECIFIC TYPES
 // ─────────────────────────────────────────────────────────────
-
-export type PortfolioType = "psx" | "yahoo";
-export type EmailTheme = "dark" | "light";
 
 export interface EnvConfig {
   // MongoDB
@@ -17,11 +17,12 @@ export interface EnvConfig {
   EMAIL_PASS: string;
   EMAIL_TO: string;
   EMAIL_THEME: EmailTheme;
-  // Meta WhatsApp Cloud API
+  // Green API WhatsApp  (green-api.com)
   WHATSAPP_ENABLED: boolean;
-  WHATSAPP_TOKEN: string; // Bearer token (System User Access Token)
-  WHATSAPP_PHONE_ID: string; // Phone number ID from Meta dashboard
-  WHATSAPP_TO: string; // Recipient phone number with country code, e.g. 923001234567
+  WHATSAPP_INSTANCE_ID: string; // Green API instance ID
+  WHATSAPP_TOKEN: string; // Green API instance token
+  WHATSAPP_CHAT_ID: string; // e.g. 923001234567@c.us
+  GREEN_API_URL: string; // e.g. https://7107.api.greenapi.com (instance-specific host)
   // Gemini
   GEMINI_ENABLED: boolean;
   GEMINI_API_KEY: string;
@@ -29,17 +30,12 @@ export interface EnvConfig {
   // Data
   PORTFOLIO_TYPE: PortfolioType;
   PSX_BASE_URL: string;
+  // Data mode (PSX only)
+  // A = PSX live tick only (no history, indicators null)
+  // B = Yahoo Finance OHLCV + PSX live tick override (full indicators)
+  DATA_MODE: "A" | "B";
   // Misc
   TIMEZONE: string;
-}
-
-export interface PortfolioEntry {
-  symbol: string;
-  ticker: string;
-  shares: number;
-  avgCost: number;
-  name: string;
-  sector: string;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -58,12 +54,15 @@ export const ENV: EnvConfig = {
     ? "light"
     : "dark") as EmailTheme,
 
-  // Meta WhatsApp Cloud API  (free tier: 1000 conversations/month)
-  // Setup: https://developers.facebook.com/docs/whatsapp/cloud-api/get-started
+  // Green API WhatsApp  (free tier: 1500 messages/month)
+  // Setup: green-api.com → create instance → scan QR with WhatsApp
   WHATSAPP_ENABLED: process.env.WHATSAPP_ENABLED === "true",
+  WHATSAPP_INSTANCE_ID: process.env.WHATSAPP_INSTANCE_ID ?? "",
   WHATSAPP_TOKEN: process.env.WHATSAPP_TOKEN ?? "",
-  WHATSAPP_PHONE_ID: process.env.WHATSAPP_PHONE_ID ?? "",
-  WHATSAPP_TO: process.env.WHATSAPP_TO ?? "",
+  WHATSAPP_CHAT_ID: process.env.WHATSAPP_CHAT_ID ?? "",
+  GREEN_API_URL:
+    process.env.GREEN_API_URL ??
+    `https://${process.env.WHATSAPP_INSTANCE_ID ?? "api"}.api.greenapi.com`,
 
   GEMINI_ENABLED: process.env.GEMINI_ENABLED === "true",
   GEMINI_API_KEY: process.env.GEMINI_API_KEY ?? "",
@@ -73,6 +72,7 @@ export const ENV: EnvConfig = {
     ? "yahoo"
     : "psx") as PortfolioType,
   PSX_BASE_URL: process.env.PSX_BASE_URL ?? "https://psxterminal.com",
+  DATA_MODE: (process.env.DATA_MODE?.toUpperCase() === "A" ? "A" : "B") as "A" | "B",
 
   TIMEZONE: "Asia/Karachi",
 };

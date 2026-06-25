@@ -76,3 +76,12 @@ export async function countDocs(
   const db = await getDB();
   return db.collection(collection).countDocuments(filter);
 }
+
+export async function updateOne(
+  collection: string,
+  filter: Filter<Document>,
+  update: Document
+): Promise<void> {
+  const db = await getDB();
+  await db.collection(collection).updateOne(filter, update);
+}

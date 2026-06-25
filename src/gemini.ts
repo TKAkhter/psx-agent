@@ -1,97 +1,16 @@
 import axios from "axios";
 import { ENV } from "./config";
-import { TradeSignalMap, PortfolioSummary } from "./signals";
-import { StockDataMap, StockData, MarketContext } from "./fetch-data";
-import { PerformanceResult } from "./performance";
+import type {
+  TradeSignalMap, PortfolioSummary, StockDataMap, StockData,
+  MarketContext, PerformanceResult,
+  MarketIntelligence, ValidationEntry, SignalAnalysis,
+  WeeklyReview, GeminiInsight,
+} from "./types";
 
-// ─────────────────────────────────────────────────────────────
-//  TYPES  — compact Gemini JSON keys expand to these
-// ─────────────────────────────────────────────────────────────
-
-export interface MarketIntelligence {
-  global: {
-    sentiment: string | null;
-    oil_brent_usd: string | null;
-    oil_trend: string | null;
-    usd_pkr: string | null;
-    fed_stance: string | null;
-    us_10y_yield: string | null;
-    em_flows: string | null;
-    key_drivers: string[];
-  };
-  pakistan: {
-    kse100_level: string | null;
-    kse100_chg: string | null;
-    sbp_rate: string | null;
-    sbp_outlook: string | null;
-    cpi: string | null;
-    cpi_trend: string | null;
-    pkr_outlook: string | null;
-    imf_program: string | null;
-    fx_reserves: string | null;
-    political_risk: string | null;
-    key_risks: string[];
-    key_tailwinds: string[];
-  };
-  sector_outlook: Record<string, string>;
-  overall_stance: string | null;
-  today_headline: string | null;
-  raw?: string;
-}
-
-export interface ValidationEntry {
-  symbol: string;
-  system_action: string;
-  verdict: "Agree" | "Disagree" | "Partial";
-  conviction: "High" | "Med" | "Low";
-  analyst_note: string;
-  alt_action: string | null;
-  alt_price: string | null;
-  key_catalyst: string;
-  key_risk: string;
-  time_horizon: string;
-  beginner_explanation: string;
-  entry_zone: string | null;
-  exit_zone: string | null;
-}
-
-export interface SignalAnalysis {
-  portfolio_health: {
-    concentration_risk: string;
-    concentration_detail: string;
-    pnl_comment: string;
-    best_positioned: string;
-    biggest_risk: string;
-  };
-  validation: ValidationEntry[];
-  macro_impact: string;
-  top_trade_today: string;
-  avoid_today: string | null;
-  daily_tip: string;
-  emotional_state: string;
-  overall_stance: string;
-  raw?: string;
-}
-
-export interface WeeklyReview {
-  weeklyOutlook: string;
-  portfolioGrade: string;
-  positionsToWatch: Array<{
-    sym: string;
-    reason: string;
-    upcomingCatalyst: string | null;
-  }>;
-  rebalanceAdvice: string;
-  riskWarning: string;
-  weeklyTip: string;
-  raw?: string;
-}
-
-export interface GeminiInsight {
-  market: MarketIntelligence | null;
-  analysis: SignalAnalysis | null;
-  weekly: WeeklyReview | null;
-}
+export type {
+  MarketIntelligence, ValidationEntry, SignalAnalysis,
+  WeeklyReview, GeminiInsight,
+} from "./types";
 
 // ─────────────────────────────────────────────────────────────
 //  SYSTEM INSTRUCTION  (once — reduces per-call token count)
@@ -243,6 +162,11 @@ async function validateAndCoach(
       bear: s.bearReasons.slice(0, 2),
     }));
 
+  // Full list of symbols already held — used to constrain SELL
+  // rotation suggestions to stocks the investor already owns
+  // (no new capital required, no new positions introduced).
+  const portfolioSymbols = snapshot.map((s) => s.sym).join(",");
+
   const prompt = `${today}. ${macroLine}
 ${perfLine}
 Port:cost=${summary.totalCost?.toLocaleString()} val=${summary.totalValue?.toLocaleString()} pnl=${
@@ -251,8 +175,10 @@ Port:cost=${summary.totalCost?.toLocaleString()} val=${summary.totalValue?.toLoc
 Sectors:${JSON.stringify(summary.sectorWeights)}
 Signals:${JSON.stringify(sigs)}
 Holdings:${JSON.stringify(snapshot)}
+OwnedSymbols:${portfolioSymbols}
 Return JSON:
-{"health":{"concRisk":"Low|Med|High","concDetail":"<txt>","pnlComment":"<txt>","best":"<SYM—why>","risk":"<SYM—why>"},"v":[{"sym":"SYM","act":"BUY|SELL|HOLD|STRONG_BUY|STRONG_SELL","verdict":"Agree|Disagree|Partial","conv":"High|Med|Low","note":"<2 sentences: tech+sector>","altAct":null,"altPx":null,"catalyst":"<named trigger>","risk":"<named risk>","horizon":"1-3d|1-2w|1-3m","simple":"<1-2 plain English sentences with PKR amounts>","entryZone":"<PKR range>","exitZone":"<PKR range>"}],"macro":"<portfolio-specific impact>","topTrade":"<SYM—why best R/R>","avoid":"<SYM or null>","tip":"<1 tip>","mood":"Confident|Cautious|Patient|Defensive","stance":"Bull|Bear|Neutral"}`;
+{"health":{"concRisk":"Low|Med|High","concDetail":"<txt>","pnlComment":"<txt>","best":"<SYM—why>","risk":"<SYM—why>"},"v":[{"sym":"SYM","act":"BUY|SELL|HOLD|STRONG_BUY|STRONG_SELL","verdict":"Agree|Disagree|Partial","conv":"High|Med|Low","note":"<2 sentences: tech+sector>","altAct":null,"altPx":null,"altBuys":["<SYM2>","<SYM3>"]|null,"catalyst":"<named trigger>","risk":"<named risk>","horizon":"1-3d|1-2w|1-3m","simple":"<1-2 plain English sentences with PKR amounts>","entryZone":"<PKR range>","exitZone":"<PKR range>"}],"macro":"<portfolio-specific impact>","topTrade":"<SYM—why best R/R>","avoid":"<SYM or null>","tip":"<1 tip>","mood":"Confident|Cautious|Patient|Defensive","stance":"Bull|Bear|Neutral"}
+NOTE: altBuys is ONLY for SELL/STRONG_SELL signals — pick 1-2 symbols from OwnedSymbols (never a stock not already owned) that currently look comparatively stronger, to suggest rotating sale proceeds into. Use null for BUY/HOLD signals.`;
 
   const raw = await geminiCall(prompt, 3000, false);
   return expandAnalysisRaw(raw);
@@ -490,6 +416,7 @@ function expandAnalysisRaw(a: any): SignalAnalysis {
       beginner_explanation: v.simple ?? "",
       entry_zone: v.entryZone ?? null,
       exit_zone: v.exitZone ?? null,
+      alt_buy_suggestions: Array.isArray(v.altBuys) ? v.altBuys : null,
     })),
     macro_impact: a.macro ?? "",
     top_trade_today: a.topTrade ?? "",

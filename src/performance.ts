@@ -1,31 +1,46 @@
 import { round2 } from "./indicators";
-import { TradeSignalMap } from "./signals";
-import { StockDataMap, StockData } from "./fetch-data";
-import { PortfolioSummary } from "./signals";
+import type { TradeSignalMap, PortfolioSummary, StockDataMap, StockData, BreakdownEntry, PerformanceResult } from "./types";
 import * as db from "./db";
 
-export interface BreakdownEntry {
-  symbol: string;
-  action: string;
-  prevPrice: number;
-  currPrice: number;
-  delta: number;
-  correct: boolean;
-}
-
-export interface PerformanceResult {
-  accuracy: number;
-  correct: number;
-  total: number;
-  breakdown: BreakdownEntry[];
-  sessionDate: Date;
-}
+export type { BreakdownEntry, PerformanceResult } from "./types";
 
 interface SavedSession {
   createdAt: Date;
   signals: Record<string, { action: string }>;
   snapshot: Record<string, { price: number; unrealizedPct: number | null }>;
   geminiStance: string | null;
+}
+
+// ─────────────────────────────────────────────────────────────
+//  ACCURACY EVALUATION
+//
+//  IMPROVED: action-specific correctness thresholds instead of a
+//  single arbitrary "< 2%" band for everything:
+//   - BUY/STRONG_BUY: correct if price did not fall (>= prev price)
+//   - SELL/STRONG_SELL: correct if price did not rise (<= prev price)
+//   - HOLD: correct if price stayed within a tighter +/-1.5% band
+//     (HOLD is a "no major move expected" call — 2% was too loose
+//     and let genuinely wrong HOLD calls count as correct)
+//   - STRONG_BUY/STRONG_SELL require a slightly larger move in the
+//     right direction (>= 0.3%) to count as correct — a flat price
+//     shouldn't validate a "STRONG" conviction call.
+// ─────────────────────────────────────────────────────────────
+
+function isCorrect(action: string, prevPrice: number, currPrice: number, delta: number): boolean {
+  switch (action) {
+    case "STRONG_BUY":
+      return delta >= 0.3; // must show some real upward move
+    case "BUY":
+      return currPrice >= prevPrice;
+    case "STRONG_SELL":
+      return delta <= -0.3;
+    case "SELL":
+      return currPrice <= prevPrice;
+    case "HOLD":
+      return Math.abs(delta) < 1.5; // tighter band than before
+    default:
+      return Math.abs(delta) < 1.5;
+  }
 }
 
 export async function evaluatePerformance(
@@ -38,8 +53,7 @@ export async function evaluatePerformance(
     } as Parameters<typeof db.findMany>[2]);
     if (!docs.length) return null;
     const prev = docs[0];
-    let correct = 0,
-      total = 0;
+    let correct = 0, total = 0;
     const breakdown: BreakdownEntry[] = [];
 
     for (const [ticker, entry] of Object.entries(currentData)) {
@@ -47,22 +61,13 @@ export async function evaluatePerformance(
       if ("error" in entry || !(entry as StockData).price) continue;
       const curr = entry as StockData;
       const sym = ticker.replace(".KA", "");
-      const prevSig = prev.signals?.[sym];
+      const prevSig  = prev.signals?.[sym];
       const prevSnap = prev.snapshot?.[sym];
       if (!prevSig || !prevSnap?.price) continue;
 
       total++;
-      const delta = round2(
-        ((curr.price - prevSnap.price) / prevSnap.price) * 100
-      )!;
-      const isBuy = prevSig.action === "BUY" || prevSig.action === "STRONG_BUY";
-      const isSell =
-        prevSig.action === "SELL" || prevSig.action === "STRONG_SELL";
-      const ok = isBuy
-        ? curr.price >= prevSnap.price
-        : isSell
-        ? curr.price <= prevSnap.price
-        : Math.abs(delta) < 2;
+      const delta = round2(((curr.price - prevSnap.price) / prevSnap.price) * 100)!;
+      const ok = isCorrect(prevSig.action, prevSnap.price, curr.price, delta);
       if (ok) correct++;
       breakdown.push({
         symbol: sym,
@@ -94,10 +99,7 @@ export async function saveSession(
   stockData: StockDataMap,
   geminiStance: string | null
 ): Promise<void> {
-  const snapshot: Record<
-    string,
-    { price: number; unrealizedPct: number | null }
-  > = {};
+  const snapshot: Record<string, { price: number; unrealizedPct: number | null }> = {};
   for (const [ticker, entry] of Object.entries(stockData)) {
     if (ticker === "__market__") continue;
     if ("error" in entry || !(entry as StockData).price) continue;

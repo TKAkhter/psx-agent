@@ -1,115 +1,16 @@
 import { round2, calcPct } from "./indicators";
 import { SIGNAL_THRESHOLDS, SCORE_WEIGHTS, RSI_LEVELS } from "./config";
-import { StockData, StockDataMap, StockError } from "./fetch-data";
+import type { StockData, StockDataMap, StockError, StockResult } from "./types";
 
-// ─────────────────────────────────────────────────────────────
-//  TYPES
-// ─────────────────────────────────────────────────────────────
+export type {
+  ActionLabel, TradeSignal, SkipSignal, Signal,
+  SignalMap, TradeSignalMap, PortfolioSummary,
+} from "./types";
 
-export type ActionLabel =
-  | "STRONG_BUY"
-  | "BUY"
-  | "HOLD"
-  | "SELL"
-  | "STRONG_SELL"
-  | "SKIP";
-
-export interface TradeSignal {
-  // Identity
-  symbol: string;
-  action: ActionLabel;
-  score: number;
-  confidence: "Very High" | "High" | "Medium" | "Low";
-  // Price levels
-  limitPrice: number | null;
-  targetPrice: number | null;
-  stopLoss: number | null;
-  qty: number;
-  rrRatio: number | null;
-  potentialGain: number; // PKR
-  maxRisk: number; // PKR
-  // Instructions
-  instruction: string;
-  beginnerNote: string;
-  proSummary: string;
-  // Reasons (algo output)
-  bullReasons: string[];
-  bearReasons: string[];
-  neutralNotes: string[];
-  // Key display fields (mirrors from StockData)
-  price: number;
-  open: number | null;
-  high: number | null;
-  low: number | null;
-  changePct: number | null;
-  bid: number | null;
-  ask: number | null;
-  rsi14: number | null;
-  rsi9: number | null;
-  mfi: number | null;
-  roc: number | null;
-  stoch: StockData["stoch"];
-  macd: StockData["macd"];
-  bb: StockData["bb"];
-  adx: StockData["adx"];
-  willR: number | null;
-  cci: number | null;
-  ichi: StockData["ichi"];
-  superTrend: StockData["superTrend"];
-  vwap: number | null;
-  obv: StockData["obv"];
-  pivots: StockData["pivots"];
-  trend: StockData["trend"];
-  vol: StockData["vol"];
-  patterns: StockData["patterns"];
-  divergence: StockData["divergence"];
-  sparkline: string;
-  // MAs
-  ma5: number | null;
-  ma10: number | null;
-  ma20: number | null;
-  ma50: number | null;
-  ma200: number | null;
-  ema9: number | null;
-  ema21: number | null;
-  // P&L
-  unrealizedPnl: number;
-  unrealizedPct: number | null;
-  marketValue: number;
-  costBasis: number;
-  shares: number;
-  avgCost: number;
-  // Performance
-  perf1d: number | null;
-  perf1w: number | null;
-  perf1m: number | null;
-  perf6m: number | null;
-  high6m: number;
-  low6m: number;
-  maxDrawdown: number;
-  pctFrom6mHigh: number | null;
-  pctFrom6mLow: number | null;
-}
-
-export interface SkipSignal {
-  symbol: string;
-  action: "SKIP";
-  error: string;
-  score: 0;
-  price: null;
-}
-
-export type Signal = TradeSignal | SkipSignal;
-export type SignalMap = Record<string, Signal>;
-export type TradeSignalMap = SignalMap; // alias — used by gemini.ts / templates
-
-export interface PortfolioSummary {
-  totalCost: number;
-  totalValue: number;
-  totalPnl: number;
-  totalPnlPct: number;
-  sectorWeights: Record<string, number>;
-}
+import type {
+  ActionLabel, TradeSignal, SkipSignal, Signal,
+  SignalMap, TradeSignalMap, PortfolioSummary,
+} from "./types";
 
 // ─────────────────────────────────────────────────────────────
 //  SIGNAL BUILDER
@@ -732,18 +633,20 @@ function buildSignal(symbol: string, d: StockData): TradeSignal {
 
 export function getSignals(stockData: StockDataMap): SignalMap {
   const signals: SignalMap = {};
-  for (const [symbol, d] of Object.entries(stockData)) {
+  for (const [symbol, raw] of Object.entries(stockData)) {
     if (symbol === "__market__") continue;
-    if (!d.price || (d as any).error) {
+    const d = raw as StockResult;
+    if (!d.price || "error" in d) {
+      const errMsg: string = "error" in d && d.error ? d.error : "No price";
       signals[symbol] = {
         symbol,
         action: "SKIP",
-        error: (d as StockError).error ?? "No price",
+        error: errMsg,
         score: 0,
         price: null,
       };
     } else {
-      signals[symbol] = buildSignal(symbol, d as StockData);
+      signals[symbol] = buildSignal(symbol, d);
     }
   }
   return signals;
@@ -760,10 +663,11 @@ export function calcPortfolioSummary(
     totalValue = 0;
   const sectorMap: Record<string, number> = {};
 
-  for (const [key, d] of Object.entries(stockData)) {
+  for (const [key, raw] of Object.entries(stockData)) {
     if (key === "__market__") continue;
-    if (!d.price || (d as any).error) continue;
-    const sd = d as StockData;
+    const d = raw as StockResult;
+    if (!d.price || "error" in d) continue;
+    const sd = d;
     totalCost += sd.costBasis ?? 0;
     totalValue += sd.marketValue ?? 0;
     if (sd.sector)

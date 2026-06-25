@@ -293,12 +293,22 @@ function extractBreadth(
 }
 
 // ─────────────────────────────────────────────────────────────
-//  YAHOO FINANCE — OHLCV history (Mode B)
-//  PSX stocks use .KA suffix on Yahoo (e.g. MEBL.KA)
+//  YAHOO FINANCE -- OHLCV history (Mode B)
+//  PSX stocks use .KA suffix on Yahoo (e.g. MEBL.KA).
+//  Some symbols have no Yahoo coverage -- those fall back to
+//  Mode A (PSX tick only) in fetchTickerModeB.
+//
+//  ALIAS MAP: override Yahoo ticker when PSX symbol differs
+//  from the Yahoo Finance listing name.
 // ─────────────────────────────────────────────────────────────
 
+const YAHOO_TICKER_ALIASES: Record<string, string> = {
+  // Add overrides here if a symbol's Yahoo ticker differs from SYMBOL.KA
+  // e.g. "ENGROH": "ENGRO.KA"  <- only if confirmed on finance.yahoo.com
+};
+
 async function fetchYahooKlines(symbol: string): Promise<OhlcvBar[]> {
-  const ticker = `${symbol}.KA`;
+  const ticker = YAHOO_TICKER_ALIASES[symbol] ?? `${symbol}.KA`;
   const yf = new YahooFinance();
   const period2 = new Date();
   const period1 = new Date();
@@ -496,17 +506,43 @@ async function fetchTickerModeB(
     fetchYahooKlines(symbol),
   ]);
 
-  if (yahooRes.status === "rejected")
-    throw new Error(`${symbol} Yahoo: ${(yahooRes.reason as Error).message}`);
+  const resolved = psxRes.status === "fulfilled" ? psxRes.value : {} as PsxSymbolResolved;
+
+  // If Yahoo failed (e.g. ENGROH.KA not listed on Yahoo), fall back to PSX
+  // tick-only so the stock stays in the portfolio -- never silently drop it.
+  if (yahooRes.status === "rejected") {
+    console.warn(`  ~ ${symbol}: Yahoo failed (${(yahooRes.reason as Error).message}) -- falling back to PSX tick`);
+    const liveTick = extractLiveTick(resolved, symbol);
+    if (!liveTick)
+      throw new Error(`${symbol}: Yahoo unavailable and no PSX tick either`);
+    const syntheticBar: OhlcvBar = {
+      date:   new Date().toISOString().slice(0, 10),
+      open:   liveTick.price,
+      high:   liveTick.high,
+      low:    liveTick.low,
+      close:  liveTick.price,
+      volume: liveTick.volume,
+    };
+    const computed = computeIndicators([syntheticBar], info, liveTick);
+    return {
+      resolved,
+      data: {
+        ...computed,
+        fundamentals: {},
+        dividends:    extractDividends(resolved),
+        dataSource:   "PSX tick only (Yahoo unavailable -- Mode B fallback)",
+        historyBars:  1,
+      },
+    };
+  }
 
   const hist     = yahooRes.value;
-  const resolved = psxRes.status === "fulfilled" ? psxRes.value : {} as PsxSymbolResolved;
   const liveTick = extractLiveTick(resolved, symbol); // null outside market hours
 
   const computed   = computeIndicators(hist, info, liveTick);
   const dataSource = liveTick
     ? "Yahoo Finance (history) + PSX live tick override (Mode B)"
-    : "Yahoo Finance only — PSX tick unavailable (Mode B)";
+    : "Yahoo Finance only -- PSX tick unavailable (Mode B)";
 
   return {
     resolved,

@@ -1,5 +1,6 @@
 import { MongoClient, Db, Filter, FindOptions, Document } from "mongodb";
 import { ENV } from "./config";
+import { log } from "./logger";
 
 // ─────────────────────────────────────────────────────────────
 //  SINGLETON
@@ -13,7 +14,7 @@ export async function connectDB(): Promise<Db> {
   mongoClient = new MongoClient(ENV.MONGODB_URI);
   await mongoClient.connect();
   mongoDB = mongoClient.db(ENV.MONGODB_DB);
-  console.log(`  ✓ MongoDB → ${ENV.MONGODB_DB}`);
+  log.info("MongoDB connected", { db: ENV.MONGODB_DB, uri: ENV.MONGODB_URI.replace(/:([^@]+)@/, ":***@") });
   return mongoDB;
 }
 

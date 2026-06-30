@@ -39,3 +39,57 @@ for (const [k, v] of Object.entries(resolved)) {
 
 const mebl = resolved.marketData?.instruments?.REG?.MEBL;
 console.log("\n--- MEBL full tick ---\n", JSON.stringify(mebl, null, 2));
+
+function decodeSuperJSON(apiResponse) {
+  // 1. Safely extract the inner data array from the nodes array
+  const dataNode = apiResponse?.nodes?.find(node => node.type === "data" && node.data);
+  const rawData = dataNode?.data;
+  
+  if (!rawData || !Array.isArray(rawData)) {
+    console.error("Could not find the flat data array in your response.");
+    return null;
+  }
+
+  // 2. Initialize identical structural layouts
+  const resolved = rawData.map(item => {
+    if (item && typeof item === 'object') {
+      return Array.isArray(item) ? [] : {};
+    }
+    return item;
+  });
+
+  // Helper to trace indices back to their structural counterparts
+  function resolveValue(val) {
+    if (Number.isInteger(val) && val >= 0 && val < rawData.length) {
+      const target = rawData[val];
+      if (target && typeof target === 'object') {
+        return resolved[val];
+      }
+      return target;
+    }
+    return val;
+  }
+
+  // 3. Rebuild relationships across references
+  rawData.forEach((original, i) => {
+    if (!original || typeof original !== 'object') return;
+
+    if (Array.isArray(original)) {
+      original.forEach(item => {
+        resolved[i].push(resolveValue(item));
+      });
+    } else {
+      Object.keys(original).forEach(key => {
+        resolved[i][key] = resolveValue(original[key]);
+      });
+    }
+  });
+
+  // Position 0 holds your fully reassembled company data object
+  return resolved[0];
+}
+
+// === RUN TEST ===
+const result = decodeSuperJSON(raw);
+console.log(JSON.stringify(result));
+

@@ -1,4 +1,5 @@
 import moment from "moment-timezone";
+import { log } from "./logger";
 import * as db from "./db";
 import { loadPortfolio, buildPortfolioMap } from "./portfolio";
 import { fetchAllStocks } from "./fetch-data";
@@ -28,9 +29,7 @@ const isWeekend = () => {
 
 const LINE = "═".repeat(58);
 const DASH = "─".repeat(58);
-const step = (n: number, label: string) =>
-  console.log(`\n${DASH}\n  ${n}/7 — ${label}`);
-const head = (label: string) => console.log(`\n${LINE}\n  ${label}\n${LINE}`);
+const head = (label: string) => process.stdout.write(`\n${LINE}\n  ${label}\n${LINE}\n`);
 
 // ─────────────────────────────────────────────────────────────
 //  BRIEF SUMMARY TEXT  (email body / WhatsApp caption — the full
@@ -144,34 +143,32 @@ async function main(): Promise<void> {
   const pktNow = nowPKT();
   const sessionHour = pktNow.hour() + pktNow.minute() / 60;
 
-  head(
-    `PSX Agent  ·  ${stampPKT()}  ·  Type:${ENV.PORTFOLIO_TYPE}  ·  Theme:${
-      ENV.EMAIL_THEME
-    }`
-  );
+  head(`PSX Agent  ·  ${stampPKT()}  ·  Type:${ENV.PORTFOLIO_TYPE}  ·  Theme:${ENV.EMAIL_THEME}`);
+  log.info("PSX Agent starting", { time: stampPKT(), mode: ENV.PORTFOLIO_TYPE, dataMode: process.env.DATA_MODE ?? "B", theme: ENV.EMAIL_THEME });
 
   if (isWeekend()) {
-    console.log("\n  🏖  Market closed (weekend)\n");
+    log.info("Market closed (weekend) -- skipping run");
     process.exit(0);
   }
 
   // ── 1. Database ───────────────────────────────────────────
-  step(1, "Database");
+  log.step(1, 7, "Database");
   try {
     await db.connectDB();
   } catch (err) {
-    console.error(`  ✗ MongoDB: ${(err as Error).message}`);
+    log.fatal("MongoDB connection failed -- cannot continue", { error: (err as Error).message });
     process.exit(1);
   }
 
   // ── 2. Portfolio ──────────────────────────────────────────
-  step(2, "Portfolio");
+  log.step(2, 7, "Portfolio");
   const positions = await loadPortfolio();
   const portfolioMap = buildPortfolioMap(positions);
 
   // ── 3. Market Data ────────────────────────────────────────
-  step(
+  log.step(
     3,
+    7,
     `Market data  (${
       ENV.PORTFOLIO_TYPE === "psx" ? "PSXTerminal.com" : "Yahoo Finance"
     })`
@@ -181,63 +178,67 @@ async function main(): Promise<void> {
   const loaded = Object.keys(stockData).filter(
     (k) => k !== "__market__" && !("error" in stockData[k])
   ).length;
-  console.log(
-    `\n  ✓ ${loaded}/${Object.keys(portfolioMap).length} stocks loaded`
-  );
-  if (market?.kse100)
-    console.log(
-      `  KSE-100: ${market.kse100.level}  (${
-        market.kse100.changePct >= 0 ? "+" : ""
-      }${market.kse100.changePct}%)`
-    );
-  if (market?.breadth)
-    console.log(
-      `  Breadth: Adv ${market.breadth.advances}  Dec ${market.breadth.declines}  A/D ${market.breadth.adRatio}`
-    );
+  const total = Object.keys(portfolioMap).length;
+  const errored = total - loaded;
+  log.info("Market data loaded", {
+    loaded, total, errored,
+    kse100: market?.kse100?.level,
+    kse100Chg: market?.kse100 ? `${market.kse100.changePct >= 0 ? "+" : ""}${market.kse100.changePct}%` : null,
+    advances: market?.breadth?.advances,
+    declines: market?.breadth?.declines,
+    adRatio: market?.breadth?.adRatio,
+  });
+  if (errored > 0) {
+    const errSymbols = Object.entries(stockData)
+      .filter(([k, v]) => k !== "__market__" && "error" in v)
+      .map(([k, v]) => `${k}:(${(v as { error: string }).error.slice(0, 60)})`);
+    log.warn("Some stocks failed to load", { errored, symbols: errSymbols });
+  }
   if (loaded === 0) {
-    console.error("  ✗ No stocks loaded");
+    log.fatal("No stocks loaded -- cannot generate report", { hint: "Check PSX/DPS API connectivity and DATA_MODE setting" });
     await db.closeDB();
     process.exit(1);
   }
 
   // ── 4. Signals ────────────────────────────────────────────
-  step(4, "Computing signals");
+  log.step(4, 7, "Computing signals");
   const signals = getSignals(stockData);
   const summary = calcPortfolioSummary(stockData);
   const counts = { STRONG_BUY: 0, BUY: 0, HOLD: 0, SELL: 0, STRONG_SELL: 0 };
   for (const s of Object.values(signals)) {
     if (s.action in counts) counts[s.action as keyof typeof counts]++;
   }
-  console.log(
-    `  STRONG_BUY:${counts.STRONG_BUY}  BUY:${counts.BUY}  HOLD:${counts.HOLD}  SELL:${counts.SELL}  STRONG_SELL:${counts.STRONG_SELL}`
-  );
-  console.log(
-    `  P&L: ${(summary.totalPnlPct ?? 0) >= 0 ? "+" : ""}${
-      summary.totalPnlPct
-    }%  (PKR ${(summary.totalPnl ?? 0).toLocaleString()})`
-  );
+  log.info("Signals computed", {
+    STRONG_BUY: counts.STRONG_BUY, BUY: counts.BUY, HOLD: counts.HOLD,
+    SELL: counts.SELL, STRONG_SELL: counts.STRONG_SELL,
+    pnlPct: `${(summary.totalPnlPct ?? 0) >= 0 ? "+" : ""}${summary.totalPnlPct}%`,
+    pnlPKR: (summary.totalPnl ?? 0).toLocaleString(),
+    invested: (summary.totalCost ?? 0).toLocaleString(),
+    value: (summary.totalValue ?? 0).toLocaleString(),
+  });
 
   // ── 5. Performance ────────────────────────────────────────
-  step(5, "Performance evaluation");
+  log.step(5, 7, "Performance evaluation");
   const performance = await evaluatePerformance(stockData);
   if (performance) {
-    console.log(
-      `  Accuracy: ${performance.accuracy}% (${performance.correct}/${performance.total})`
-    );
+    log.info("Signal accuracy evaluated", {
+      accuracy: `${performance.accuracy}%`,
+      correct: performance.correct,
+      total: performance.total,
+    });
     for (const b of performance.breakdown) {
-      console.log(
-        `    ${b.correct ? "✓" : "✗"} ${b.symbol}: ${b.action} ${b.prevPrice}→${
-          b.currPrice
-        } (${b.delta >= 0 ? "+" : ""}${b.delta}%)`
-      );
+      log.debug(`  ${b.correct ? "✓" : "✗"} ${b.symbol}: ${b.action}`, {
+        prevPrice: b.prevPrice, currPrice: b.currPrice,
+        delta: `${b.delta >= 0 ? "+" : ""}${b.delta}%`, correct: b.correct,
+      });
     }
   } else {
-    console.log("  ℹ  No previous session");
+    log.info("No previous session found -- skipping accuracy evaluation");
   }
 
   // ── 6. Gemini ─────────────────────────────────────────────
   const isFirstSession = sessionHour < 11;
-  step(6, `Gemini AI (Phase 1+2${isFirstSession ? "+3 weekly" : ""})`);
+  log.step(6, 7, `Gemini AI (Phase 1+2${isFirstSession ? "+3 weekly" : ""})`);
   const timeStamp = stampPKT();
   const gemini = await getGeminiInsight(
     stockData,
@@ -265,7 +266,7 @@ async function main(): Promise<void> {
     );
 
   // ── 7. Build PDF & Send ────────────────────────────────────
-  step(7, "Generating PDF & sending");
+  log.step(7, 7, "Generating PDF & sending");
   const pdfBuffer = await generateReportPdf(
     stockData,
     signals,
@@ -274,10 +275,11 @@ async function main(): Promise<void> {
     gemini,
     timeStamp
   );
-  console.log(`  ✓ PDF generated in memory (${(pdfBuffer.length / 1024).toFixed(0)} KB, not written to disk)`);
 
   const briefSummary = buildBriefSummary(signals, summary, timeStamp);
   const pdfFileName = `PSX-Report-${timeStamp.replace(/[,:\s]+/g, "-")}.pdf`;
+
+  log.info("PDF generated", { kb: Math.round(pdfBuffer.length / 1024), file: pdfFileName });
 
   const totalBuys = counts.STRONG_BUY + counts.BUY;
   const totalSells = counts.SELL + counts.STRONG_SELL;
@@ -289,15 +291,14 @@ async function main(): Promise<void> {
     sendWhatsAppPdf(pdfBuffer, pdfFileName, briefSummary.slice(0, 1000)),
   ]);
   if (emailRes.status === "rejected")
-    console.error(`  ✗ Email: ${(emailRes.reason as Error).message}`);
+    log.error("Email delivery failed", { error: (emailRes.reason as Error).message });
   if (waPdfRes.status === "rejected") {
-    console.error(`  ✗ WhatsApp PDF: ${(waPdfRes.reason as Error).message}`);
-    // Fallback: send brief text so the user isn't left with nothing
+    log.error("WhatsApp PDF delivery failed -- trying text fallback", { error: (waPdfRes.reason as Error).message });
     try {
       await sendWhatsAppText(briefSummary);
-      console.log("  ✓ WhatsApp fallback text sent (PDF upload failed)");
+      log.info("WhatsApp text fallback sent successfully");
     } catch (err) {
-      console.error(`  ✗ WhatsApp fallback text: ${(err as Error).message}`);
+      log.error("WhatsApp text fallback also failed", { error: (err as Error).message });
     }
   }
 
@@ -308,23 +309,26 @@ async function main(): Promise<void> {
       stockData,
       gemini?.analysis?.overall_stance ?? null
     );
-    console.log("  ✓ Session saved to MongoDB");
+    log.info("Session saved to MongoDB");
   } catch (err) {
-    console.warn(`  ⚠ Save failed: ${(err as Error).message}`);
+    log.warn("Session save failed (non-fatal)", { error: (err as Error).message });
   }
 
   printSummary(signals, summary, gemini);
 
   const elapsed = ((Date.now() - startMs) / 1000).toFixed(1);
-  console.log(`\n  ✓ Done in ${elapsed}s  ·  ${stampPKT()}`);
-  console.log(`${LINE}\n`);
+  log.info(`PSX Agent complete in ${elapsed}s`, { time: stampPKT(), elapsed: `${elapsed}s` });
+  process.stdout.write(`${LINE}\n`);
 
   await db.closeDB();
   process.exit(0);
 }
 
 main().catch(async (err: Error) => {
-  console.error("\n💥 Fatal:", err.message, "\n", err.stack);
+  log.fatal("Unhandled fatal error -- agent crashed", {
+    message: err.message,
+    stack: err.stack?.split("\n").slice(0, 6).join(" | "),
+  });
   await db.closeDB().catch(() => {});
   process.exit(1);
 });

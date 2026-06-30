@@ -1,6 +1,7 @@
 import { ENV, DEFAULT_PORTFOLIO } from "./config";
 import type { PortfolioEntry, PositionInfo, PortfolioMap } from "./types";
 import * as db from "./db";
+import { log } from "./logger";
 
 export type { PositionInfo, PortfolioMap } from "./types";
 
@@ -22,7 +23,7 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
   const count = await db.countDocs(COLLECTION, { type: PORTFOLIO_TYPE });
 
   if (count === 0) {
-    console.log(`  i  Portfolio empty (type=${PORTFOLIO_TYPE}) — seeding defaults...`);
+    log.info("Portfolio empty -- seeding defaults", { type: PORTFOLIO_TYPE, count: DEFAULT_PORTFOLIO.length });
     const docs = DEFAULT_PORTFOLIO.map((p) => ({
       ...p,
       type: PORTFOLIO_TYPE,
@@ -31,7 +32,7 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
       updatedAt: new Date(),
     }));
     await db.insertMany(COLLECTION, docs);
-    console.log(`  ok  Seeded ${docs.length} positions`);
+    log.info("Portfolio seeded", { positions: docs.length, type: PORTFOLIO_TYPE });
   } else {
     // Reconcile avgCost/shares for existing records against the
     // current DEFAULT_PORTFOLIO constant — fixes stale P&L without
@@ -51,7 +52,7 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
       }
     }
     if (reconciled > 0) {
-      console.log(`  ok  Reconciled ${reconciled} position(s) — avgCost/shares synced from config`);
+      log.info("Portfolio reconciled", { updated: reconciled, reason: "avgCost/shares drifted from config.ts DEFAULT_PORTFOLIO" });
     }
   }
 
@@ -59,7 +60,7 @@ export async function loadPortfolio(): Promise<PortfolioEntry[]> {
     active: { $ne: false },
     type: PORTFOLIO_TYPE,
   });
-  console.log(`  ok  ${positions.length} positions loaded (type=${PORTFOLIO_TYPE})`);
+  log.info("Portfolio loaded", { positions: positions.length, type: PORTFOLIO_TYPE, symbols: positions.map(p => p.ticker).join(",") });
   return positions;
 }
 

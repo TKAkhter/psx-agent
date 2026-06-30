@@ -1,5 +1,6 @@
 import axios from "axios";
 import { ENV } from "./config";
+import { log } from "./logger";
 import type {
   TradeSignalMap, PortfolioSummary, StockDataMap, StockData,
   MarketContext, PerformanceResult,
@@ -45,10 +46,12 @@ const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models`;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function geminiCall(
+  phase: string,
   prompt: string,
   maxTokens: number,
   useSearch: boolean
 ): Promise<any> {
+  if (!ENV.GEMINI_API_KEY) throw new Error("GEMINI_API_KEY not set");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const body: Record<string, any> = {
     systemInstruction: SYSTEM_INSTRUCTION,
@@ -56,18 +59,58 @@ async function geminiCall(
     generationConfig: {
       temperature: 0.1,
       maxOutputTokens: maxTokens,
-      // responseMimeType: "application/json",
     },
   };
   if (useSearch) body.tools = [{ googleSearch: {} }];
 
   const url = `${GEMINI_URL}/${ENV.GEMINI_MODEL}:generateContent?key=${ENV.GEMINI_API_KEY}`;
-  const res = await axios.post(url, body, {
-    headers: { "Content-Type": "application/json" },
-    timeout: 60_000,
-  });
+  const t0 = Date.now();
+  log.apiStart(`Gemini ${phase}`, `${GEMINI_URL}/${ENV.GEMINI_MODEL}:generateContent`);
 
-  const raw = res.data?.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
+  let res: any;
+  try {
+    res = await axios.post(url, body, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 60_000,
+    });
+  } catch (err) {
+    const e = err as { response?: { status?: number; data?: unknown }; code?: string; message?: string };
+    const status = e?.response?.status;
+    const detail = status === 429
+      ? "Gemini rate limit hit (429) -- quota exhausted"
+      : status === 401
+      ? "Gemini auth failed (401) -- check GEMINI_API_KEY"
+      : status === 503
+      ? "Gemini service unavailable (503) -- retry later"
+      : `Gemini HTTP ${status ?? "network error"}: ${e?.code ?? e?.message}`;
+    log.apiError(`Gemini ${phase}`, `${GEMINI_URL}/${ENV.GEMINI_MODEL}`, Date.now() - t0, err);
+    throw new Error(detail);
+  }
+
+  const ms = Date.now() - t0;
+  const candidate = res.data?.candidates?.[0];
+  const finishReason = candidate?.finishReason ?? "UNKNOWN";
+
+  if (finishReason === "SAFETY") {
+    log.warn(`Gemini ${phase}: response blocked by safety filter`, { ms, finishReason });
+    return { raw: "SAFETY_BLOCKED" };
+  }
+  if (finishReason === "MAX_TOKENS") {
+    log.warn(`Gemini ${phase}: response truncated (MAX_TOKENS) -- increase maxTokens or shorten prompt`, { ms, maxTokens });
+  }
+
+  const raw = candidate?.content?.parts?.[0]?.text ?? "";
+  if (!raw) {
+    log.warn(`Gemini ${phase}: empty response text`, {
+      ms, finishReason,
+      candidateCount: res.data?.candidates?.length ?? 0,
+    });
+    return { raw: "" };
+  }
+
+  log.apiOk(`Gemini ${phase}`, `${GEMINI_URL}/${ENV.GEMINI_MODEL}`, ms,
+    `${raw.length} chars  finish=${finishReason}  search=${useSearch}`);
+
   const clean = raw
     .replace(/```json\s*/gi, "")
     .replace(/```\s*/g, "")
@@ -81,10 +124,14 @@ async function geminiCall(
       try {
         return JSON.parse(match[1]);
       } catch {
-        /* fall */
+        log.warn(`Gemini ${phase}: JSON parse failed on extracted block`, { preview: clean.slice(0, 200) });
       }
     }
-    console.warn("  ⚠ Gemini JSON parse failed");
+    log.warn(`Gemini ${phase}: could not parse JSON from response`, {
+      promptLen: prompt.length,
+      rawLen: raw.length,
+      preview: clean.slice(0, 300),
+    });
     return { raw: clean.slice(0, 400) };
   }
 }
@@ -107,7 +154,7 @@ async function fetchMarketIntelligence(
 Return compact JSON (null if unknown):
 {"g":{"sent":"Risk-On|Risk-Off|Neutral","oil":"<Brent>","oilDir":"Rising|Falling|Stable","pkrusd":"<rate>","fed":"Hawkish|Dovish|Neutral|Pause","us10y":"<yield>","em":"Inflows|Outflows|Mixed","drivers":["<d1>","<d2>","<d3>"]},"pk":{"kse100":"<level>","kse100Chg":"<pct>","sbp":"<rate>","sbpOut":"Cut|Hold|Hike","cpi":"<pct>","cpiDir":"Falling|Stable|Rising","pkrOut":"Stable|Weak|Strong","imf":"OnTrack|AtRisk|Off","fx":"<bn USD>","polRisk":"Low|Med|High","risks":["<r1>","<r2>"],"winds":["<w1>","<w2>"]},"sectors":{"Banking":"<Bull|Bear|Neutral>|<reason>","Oil & Gas":"<Bull|Bear|Neutral>|<reason>","Fertilizer":"<Bull|Bear|Neutral>|<reason>","Cement":"<Bull|Bear|Neutral>|<reason>","Energy":"<Bull|Bear|Neutral>|<reason>","Technology":"<Bull|Bear|Neutral>|<reason>","Conglomerate":"<Bull|Bear|Neutral>|<reason>"},"stance":"Bull|Bear|Neutral","headline":"<1 sentence>"}`;
 
-  const raw = await geminiCall(prompt, 1000, true);
+  const raw = await geminiCall("Phase1:MarketIntel", prompt, 1000, true);
   return expandMarketRaw(raw);
 }
 
@@ -180,7 +227,7 @@ Return JSON:
 {"health":{"concRisk":"Low|Med|High","concDetail":"<txt>","pnlComment":"<txt>","best":"<SYM—why>","risk":"<SYM—why>"},"v":[{"sym":"SYM","act":"BUY|SELL|HOLD|STRONG_BUY|STRONG_SELL","verdict":"Agree|Disagree|Partial","conv":"High|Med|Low","note":"<2 sentences: tech+sector>","altAct":null,"altPx":null,"altBuys":["<SYM2>","<SYM3>"]|null,"catalyst":"<named trigger>","risk":"<named risk>","horizon":"1-3d|1-2w|1-3m","simple":"<1-2 plain English sentences with PKR amounts>","entryZone":"<PKR range>","exitZone":"<PKR range>"}],"macro":"<portfolio-specific impact>","topTrade":"<SYM—why best R/R>","avoid":"<SYM or null>","tip":"<1 tip>","mood":"Confident|Cautious|Patient|Defensive","stance":"Bull|Bear|Neutral"}
 NOTE: altBuys is ONLY for SELL/STRONG_SELL signals — pick 1-2 symbols from OwnedSymbols (never a stock not already owned) that currently look comparatively stronger, to suggest rotating sale proceeds into. Use null for BUY/HOLD signals.`;
 
-  const raw = await geminiCall(prompt, 3000, false);
+  const raw = await geminiCall("Phase2:Validate", prompt, 3000, false);
   return expandAnalysisRaw(raw);
 }
 
@@ -214,7 +261,7 @@ Use Google Search for upcoming PSX catalysts (results dates, board meetings, div
 Return JSON:
 {"weeklyOutlook":"<2-3 sentences>","portfolioGrade":"A|B|C|D — <why>","positionsToWatch":[{"sym":"<SYM>","reason":"<why>","upcomingCatalyst":"<event or null>"}],"rebalanceAdvice":"<txt>","riskWarning":"<txt>","weeklyTip":"<txt>"}`;
 
-  const raw = await geminiCall(prompt, 1500, true);
+  const raw = await geminiCall("Phase3:Weekly", prompt, 1500, true);
   return raw as WeeklyReview;
 }
 
@@ -291,7 +338,7 @@ export async function getGeminiInsight(
   sessionHour: number
 ): Promise<GeminiInsight | null> {
   if (!ENV.GEMINI_ENABLED || !ENV.GEMINI_API_KEY) {
-    console.log("  ⚠ Gemini disabled");
+    log.warn("Gemini disabled (GEMINI_ENABLED=false or no API key)");
     return null;
   }
 
@@ -303,19 +350,22 @@ export async function getGeminiInsight(
   let weekly: WeeklyReview | null = null;
 
   try {
-    console.log("  → Phase 1: Market intel (Google Search grounding)...");
+    log.info("Gemini Phase 1: market intel + Google Search...");
     market = await fetchMarketIntelligence(today, liveMarket);
     if (!market.raw) {
-      console.log(
-        `    KSE-100:${market.pakistan.kse100_level} | Oil:$${market.global.oil_brent_usd} | PKR:${market.global.usd_pkr} | ${market.overall_stance}`
-      );
+      log.info("Gemini Phase 1 OK", {
+        kse100: market.pakistan.kse100_level,
+        oil: market.global.oil_brent_usd,
+        pkr: market.global.usd_pkr,
+        stance: market.overall_stance,
+      });
     }
   } catch (e) {
-    console.error("  ✗ Phase 1:", (e as Error).message);
+    log.error("Gemini Phase 1 failed", { error: (e as Error).message });
   }
 
   try {
-    console.log("  → Phase 2: Signal validation + coaching...");
+    log.info("Gemini Phase 2: signal validation + coaching...");
     analysis = await validateAndCoach(
       signals,
       snapshot,
@@ -325,27 +375,25 @@ export async function getGeminiInsight(
       today
     );
     if (!analysis.raw) {
-      console.log(
-        `    Stance:${analysis.overall_stance} | Top:${analysis.top_trade_today
-          ?.split("—")[0]
-          ?.trim()} | Mood:${analysis.emotional_state}`
-      );
+      log.info("Gemini Phase 2 OK", {
+        stance:   analysis.overall_stance,
+        topTrade: analysis.top_trade_today?.split("—")[0]?.trim(),
+        mood:     analysis.emotional_state,
+      });
     }
   } catch (e) {
-    console.error("  ✗ Phase 2:", (e as Error).message);
+    log.error("Gemini Phase 2 failed", { error: (e as Error).message });
   }
 
   // Phase 3 only at first session of day (≤ 11:00 PKT)
   if (sessionHour < 11) {
     try {
-      console.log("  → Phase 3: Weekly strategic review (9am only)...");
+      log.info("Gemini Phase 3: weekly strategic review...");
       weekly = await weeklyStrategicReview(snapshot, summary, today);
       if (!weekly.raw)
-        console.log(
-          `    Grade:${weekly.portfolioGrade?.split("—")[0]?.trim()}`
-        );
+        log.info("Gemini Phase 3 OK", { grade: weekly.portfolioGrade?.split("—")[0]?.trim() });
     } catch (e) {
-      console.error("  ✗ Phase 3:", (e as Error).message);
+      log.error("Gemini Phase 3 failed", { error: (e as Error).message });
     }
   }
 

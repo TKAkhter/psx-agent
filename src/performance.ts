@@ -1,6 +1,7 @@
 import { round2 } from "./indicators";
 import type { TradeSignalMap, PortfolioSummary, StockDataMap, StockData, BreakdownEntry, PerformanceResult } from "./types";
 import * as db from "./db";
+import { log } from "./logger";
 
 export type { BreakdownEntry, PerformanceResult } from "./types";
 
@@ -80,15 +81,22 @@ export async function evaluatePerformance(
     }
 
     if (!total) return null;
-    return {
+    const result = {
       accuracy: round2((correct / total) * 100)!,
       correct,
       total,
       breakdown,
       sessionDate: prev.createdAt,
     };
+    log.info("Performance evaluated", {
+      accuracy: `${result.accuracy}%`,
+      correct: result.correct,
+      total: result.total,
+      prevSession: prev.createdAt?.toISOString?.() ?? String(prev.createdAt),
+    });
+    return result;
   } catch (err) {
-    console.warn("  ⚠ Performance eval:", (err as Error).message);
+    log.warn("Performance evaluation failed", { error: (err as Error).message, hint: "First run has no previous session to compare against -- this is normal" });
     return null;
   }
 }

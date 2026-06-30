@@ -1,5 +1,6 @@
 import nodemailer from "nodemailer";
 import { ENV } from "../config";
+import { log } from "../logger";
 
 let transporter: ReturnType<typeof nodemailer.createTransport> | null = null;
 
@@ -26,10 +27,13 @@ export async function sendEmail(
   pdfFileName: string
 ): Promise<void> {
   if (!ENV.EMAIL_ENABLED) {
-    console.log("  ⚠ Email disabled");
+    log.warn("Email disabled (EMAIL_ENABLED=false)");
     return;
   }
-  await getTransporter().sendMail({
+  const t0 = Date.now();
+  log.info("Sending email...", { to: ENV.EMAIL_TO, subject, pdfFile: pdfFileName });
+  try {
+    await getTransporter().sendMail({
     from: `PSX Agent <${ENV.EMAIL_USER}>`,
     to: ENV.EMAIL_TO,
     subject,
@@ -46,5 +50,20 @@ export async function sendEmail(
       },
     ],
   });
-  console.log(`  ✓ Email → ${ENV.EMAIL_TO} (PDF attached: ${pdfFileName})`);
+  } catch (err) {
+    const e = err as { code?: string; responseCode?: number; message?: string };
+    log.error("Email send failed", {
+      ms: Date.now() - t0,
+      to: ENV.EMAIL_TO,
+      code: e?.code,
+      smtpCode: e?.responseCode,
+      message: e?.message,
+      hint: e?.message?.includes("Invalid login") ? "Check EMAIL_USER / EMAIL_PASS (use App Password for Gmail)"
+          : e?.message?.includes("ECONNREFUSED") ? "SMTP connection refused -- check network"
+          : e?.message?.includes("self signed") ? "SSL cert error -- check email server config"
+          : "Check EMAIL_USER, EMAIL_PASS, EMAIL_TO in .env",
+    });
+    throw err;
+  }
+  log.info("Email sent", { to: ENV.EMAIL_TO, subject, pdfFile: pdfFileName, pdfKb: Math.round(pdfBuffer.length / 1024) });
 }
